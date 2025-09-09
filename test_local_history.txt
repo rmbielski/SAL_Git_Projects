@@ -1,0 +1,4 @@
+This is a test file to verify Local History extension.
+Line 1: Initial content - MODIFIED
+Line 2: More content
+Line 3: Added new line to test history

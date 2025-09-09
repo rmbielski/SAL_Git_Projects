@@ -8,6 +8,9 @@
 *.prj
 *.cpg
 *.nc
+*.npy
+*.npz
+*.json
 
 # Model files
 *.pt
@@ -16,6 +19,7 @@
 *.ckpt
 *.bin
 *.safetensors
+*.keras
 
 # Database files
 *.gdb/

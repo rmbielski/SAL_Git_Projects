@@ -1,0 +1,40 @@
+# Data files
+*.tif
+*.geojson
+*.csv
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.nc
+*.npy
+*.npz
+*
+
+# Model files
+*.pt
+*.pth
+*.h5
+*.ckpt
+*.bin
+*.safetensors
+
+# Database files
+*.gdb/
+*.gdb
+
+# Large output files
+*/model_output/
+*/prediction_visualizations/
+*/test_results/
+
+# System files
+.DS_Store
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# Environment files
+*.env
+.env.*

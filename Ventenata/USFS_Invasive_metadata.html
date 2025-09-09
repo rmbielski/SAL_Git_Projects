@@ -1,0 +1,495 @@
+<metadata>
+<idinfo>
+<citation>
+<citeinfo>
+<origin>Natural Resource Information Systems (NRIS)</origin>
+<origin>U.S. Forest Service</origin>
+<pubdate>20241226</pubdate>
+<pubtime>200435</pubtime>
+<title>S_USA.InvasivePlantCurrent</title>
+<geoform>vector digital data</geoform>
+<onlink>http://data.fs.usda.gov/geodata/edw/datasets.php</onlink>
+</citeinfo>
+</citation>
+<descript>
+<abstract>The Current Invasive Plants (InvasivePlantCurrent) feature class contains only the most recent or latest invasive Plant Infestation polygons collected by the National Invasive Plant Inventory Protocol. Includes most recent and excludes historic observations. Includes Site ID, Plant code, status etc. for the infesting species, date, area and other basic data.</abstract>
+<purpose>The Current Invasive Plants (InvasivePlantCurrent) published feature class provides easily accessible and commonly used features and attributes essential to Forest Service business.</purpose>
+</descript>
+<status>
+<progress>In work</progress>
+<update>Daily</update>
+</status>
+<spdom>
+<bounding>
+<westbc>-151.858876</westbc>
+<eastbc>0.000232</eastbc>
+<northbc>62.322518</northbc>
+<southbc>-0.000316</southbc>
+</bounding>
+</spdom>
+<keywords>
+<theme>
+<themekt>ISO 19115 Topic Categories</themekt>
+<themekey>biota</themekey>
+</theme>
+<theme>
+<themekt>None</themekt>
+<themekey>Invasive Plant</themekey>
+</theme>
+</keywords>
+<accconst>None</accconst>
+<useconst>The USDA Forest Service makes no warranty, expressed or implied, including the warranties of merchantability and fitness for a particular purpose, nor assumes any legal liability or responsibility for the accuracy, reliability, completeness or utility of these geospatial data, or for the improper or incorrect use of these geospatial data. These geospatial data and related maps or graphics are not legal documents and are not intended to be used as such. The data and maps may not be used to determine title, ownership, legal descriptions or boundaries, legal jurisdiction, or restrictions that may be in place on either public or private land. Natural hazards may or may not be depicted on the data and maps, and users should exercise due caution. The data are dynamic and may change over time. The user is responsible to verify the limitations of the geospatial data and to use the data accordingly.</useconst>
+<ptcontac>
+<cntinfo>
+<cntorgp>
+<cntorg>USFS Chief Information Office, Enterprise Data Warehouse</cntorg>
+</cntorgp>
+<cntaddr>
+<addrtype>physical</addrtype>
+<city>Washington</city>
+<state>DC</state>
+<postal>20250</postal>
+<country>US</country>
+</cntaddr>
+<cntvoice>Please send an e-mail to the address below.</cntvoice>
+<cntemail>SM.FS.data@usda.gov</cntemail>
+</cntinfo>
+</ptcontac>
+<secinfo>
+<secclass>Unclassified</secclass>
+</secinfo>
+<native> Version 6.2 (Build 9200) ; Esri ArcGIS 10.7.1.11595</native>
+</idinfo>
+<dataqual>
+<posacc>
+<horizpa>
+<horizpar>Accuracy testing must use NSSDA testing guidelines or be reported based on compiled, published test reports appropriate for the data collection method and equipment. The method of determining accuracy should be documented in the process step of the dataset metadata record. If published accuracy results are used, use the statement 'Compiled to meet ___ (meters, feet) horizontal accuracy at 95% confidence interval' in the metadata record, and identify the testing source used. If accuracy is locally tested to NSSDA standards, the statement 'Tested to meet ___ (meters, feet) horizontal accuracy at 95% confidence interval' should be added to the metadata record. Accuracy for legacy data may be reported according to the accuracy standard in place at the time of data collection (typically National Map Accuracy Standards). Document the standard used in the metadata record. (For more information, see: http://www.fgdc.gov/standards/documents/standards/accuracy/chapter3.pdf)</horizpar>
+</horizpa>
+</posacc>
+<lineage>
+<procstep>
+<procdesc>This data was published using Feature Manipulation Engine Software. The spatial features were extracted from the transactional database, manipulated to meet the desired output format and published to the target feature class.</procdesc>
+<procdate>20181109</procdate>
+</procstep>
+</lineage>
+</dataqual>
+<spdoinfo>
+<direct>Vector</direct>
+<ptvctinf>
+<sdtsterm>
+<sdtstype>GT-polygon composed of chains</sdtstype>
+<ptvctcnt>852272</ptvctcnt>
+</sdtsterm>
+</ptvctinf>
+</spdoinfo>
+<eainfo>
+<detailed>
+<enttyp>
+<enttypl>S_USA.InvasivePlantCurrent</enttypl>
+<enttypd>Feature Class: A collection of geographic features with the same geometry type (such as point, line, or polygon), the same attributes, and the same spatial reference.</enttypd>
+<enttypds>Esri GIS Dictionary</enttypds>
+</enttyp>
+<attr>
+<attrlabl>OBJECTID</attrlabl>
+<attrdef>Internal feature number.</attrdef>
+<attrdefs>ESRI</attrdefs>
+<attrdomv>
+<udom>Sequential unique whole numbers that are automatically generated.</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>SITE_ID_FS</attrlabl>
+<attrdef>Identifier for an infestation</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>ID</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>ACCEPTED_PLANT_CODE</attrlabl>
+<attrdef>The NRCS (Natural Resources Conservation Service) accepted NRCS plant symbol for the species</attrdef>
+<attrdefs>NRIS (Natural Resource Information Systems)</attrdefs>
+<attrdomv>
+<udom>code</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>ACCEPTED_SCIENTIFIC_NAME</attrlabl>
+<attrdef>The NRCS accepted scientific name for the plant species</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>Name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>ACCEPTED_COMMON_NAME</attrlabl>
+<attrdef>The NRCS accepted common name for the plant species</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>Name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>NRCS_PLANT_CODE</attrlabl>
+<attrdef>The NRCS Code for the plant species</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>code</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>SCIENTIFIC_NAME</attrlabl>
+<attrdef>The scientific name for the plant</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>Name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>COMMON_NAME</attrlabl>
+<attrdef>Common name for plant</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>Name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>LIFEFORM_DOMINANT</attrlabl>
+<attrdef>The lifeform of the dominant type of vegetation</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<edom>
+<edomv>AL</edomv>
+<edomvd>Algae</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>FB</edomv>
+<edomvd>Forb/Herb</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>FU</edomv>
+<edomvd>Fungus</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>GR</edomv>
+<edomvd>Graminoid</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>LC</edomv>
+<edomvd>Lichen</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>LI</edomv>
+<edomvd>Liana</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>NP</edomv>
+<edomvd>Nonvascular Plant</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>SH</edomv>
+<edomvd>Shrub</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>SS</edomv>
+<edomvd>Subshrub</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>TR</edomv>
+<edomvd>Tree</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>UN</edomv>
+<edomvd>Unknown</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>VI</edomv>
+<edomvd>Vine</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>PROJECT_CODE</attrlabl>
+<attrdef>The project code groups multiple infestation sites by a specific purpose</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>code</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>PROTOCOL_NAME</attrlabl>
+<attrdef>The name of the data collection protocol</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>DATE_COLLECTED</attrlabl>
+<attrdef>The date that the observation, sample or occurrence was collected</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>date (MM/DD/YYYY)</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>DATE_COLLECTED_MOST_RECENT</attrlabl>
+<attrdef>Most recent date the data was observed, sampled, occurred, or recorded.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>date (MM/DD/YYYY)</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>CURRENT_MEASUREMENT</attrlabl>
+<attrdef>Identifies whether the infestation record is the most recently measured.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<edom>
+<edomv>Yes</edomv>
+<edomvd>The infestation is the latest measurement</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+<edom>
+<edomv>No</edomv>
+<edomvd>The infestation is an older measurement that has since been re-measured</edomvd>
+<edomvds>NRIS</edomvds>
+</edom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>TREATMENT_PRIORITY</attrlabl>
+<attrdef>A rating of priority of an occurrence to be treated. Values are locally stewarded</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>Textual description of priority</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>TOTAL_AREA</attrlabl>
+<attrdef>The acreage of the spatial feature.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>acres</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>INFESTED_AREA</attrlabl>
+<attrdef>The area in acres of the infested polygon for invasive species.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>acres</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>INFESTED_PERCENT</attrlabl>
+<attrdef>Percentage of area that is infested, if less than 100%, then area is considered a gross area feature.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>percentage</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>PLANT_STATUS_SET</attrlabl>
+<attrdef>The name for the group of status codes, indicating their source. Nationally stewarded values include invasive plant lists for most states. Values can also be locally or Regionally stewarded</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>COVER_PCT</attrlabl>
+<attrdef>The percent canopy cover of a plant species</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>percent</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>DISTANCE_TO_WATER_HORIZONTAL</attrlabl>
+<attrdef>The horizontal distance to water, recorded in feet.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>feet</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>DISTANCE_TO_WATER_VERTICAL</attrlabl>
+<attrdef>Vertical distance to subsurface water, recorded in feet</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>feet</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>OWNER_NAME</attrlabl>
+<attrdef>Responsible land management agency or owner. (Required)</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>FS_UNIT_ID</attrlabl>
+<attrdef>The organization number for the Forest Service unit that stewards the data.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>ID</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>FS_UNIT_NAME</attrlabl>
+<attrdef>The name of the Forest Service unit that stewards the data.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>name</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>FEATURE_CN</attrlabl>
+<attrdef>Primary key (control number) of the nrp_features table.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>ID</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>INPAVEG_CN</attrlabl>
+<attrdef>Primary key (Control Number) for nrp_inpa_veg table.</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>ID</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>SPATIAL_ID</attrlabl>
+<attrdef>Computer generated identifier for the spatial feature</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>ID</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>LAST_UPDATE</attrlabl>
+<attrdef>Date of last update of the record</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>Date and timestamp</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>GIS_ACRES</attrlabl>
+<attrdef>The area of the feature in acres, calculated in North American Albers Equal Area Conic projection, North American Datum 1983 (NAD83).</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>acres</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>GIS_MILES</attrlabl>
+<attrdef>The length of perimeter of the feature in miles, calculated in North American Albers Equal Area Conic projection, North American Datum 1983 (NAD83).</attrdef>
+<attrdefs>ESRI</attrdefs>
+<attrdomv>
+<udom>miles</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>EXAMINERS</attrlabl>
+<attrdef>A concatenated list of up to 10 examiners , delimited by a "|"</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>text</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>PLANT_STATUS</attrlabl>
+<attrdef>The code that describes the rarity or other special listing of a plant species</attrdef>
+<attrdefs>NRIS</attrdefs>
+<attrdomv>
+<udom>code</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>SHAPE</attrlabl>
+<attrdef>Feature geometry.</attrdef>
+<attrdefs>ESRI</attrdefs>
+<attrdomv>
+<udom>Coordinates defining the features</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>CRC_VALUE</attrlabl>
+<attrdef>CRC (Cyclic Redundancy Check) value used for change detection by the data loading process</attrdef>
+<attrdefs>NRM (National Resource Manager: a suite of applications, each of which collects, stores and reports data for various Forest Service business areas)</attrdefs>
+<attrdomv>
+<udom>code</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>SHAPE.AREA</attrlabl>
+<attrdef>Area of feature in internal units squared.</attrdef>
+<attrdefs>Esri</attrdefs>
+<attrdomv>
+<udom>Positive real numbers that are automatically generated.</udom>
+</attrdomv>
+</attr>
+<attr>
+<attrlabl>SHAPE.LEN</attrlabl>
+<attrdef>Length of feature in internal units.</attrdef>
+<attrdefs>Esri</attrdefs>
+<attrdomv>
+<udom>Positive real numbers that are automatically generated.</udom>
+</attrdomv>
+</attr>
+</detailed>
+</eainfo>
+<distinfo>
+<distrib>
+<cntinfo>
+<cntorgp>
+<cntorg>USFS Chief Information Office, Enterprise Data Warehouse</cntorg>
+</cntorgp>
+<cntaddr>
+<addrtype>physical</addrtype>
+<city>Washington</city>
+<state>DC</state>
+<postal>20250</postal>
+</cntaddr>
+<cntvoice>Please send an e-mail to the address below.</cntvoice>
+<cntemail>SM.FS.data@usda.gov</cntemail>
+</cntinfo>
+</distrib>
+<distliab>The U.S. Forest Service makes no warranty, express or implied, nor assumes any liability or responsibility for the accuracy, reliability, completeness, or utility of these geospatial data or for the improper or incorrect use of those data. The data are dynamic and may change over time. The user is responsible for verifying the limitations of the geospatial data and for using the data accordingly.</distliab>
+</distinfo>
+<metainfo>
+<metd>20230623</metd>
+<metc>
+<cntinfo>
+<cntorgp>
+<cntorg>USFS Chief Information Office, Enterprise Data Warehouse</cntorg>
+</cntorgp>
+<cntaddr>
+<addrtype>physical</addrtype>
+<city>Washington</city>
+<state>DC</state>
+<postal>20250</postal>
+</cntaddr>
+<cntvoice>Please send an e-mail to the address below.</cntvoice>
+<cntemail>SM.FS.data@usda.gov</cntemail>
+</cntinfo>
+</metc>
+<metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+<metstdv>FGDC-STD-001-1998</metstdv>
+<mettc>local time</mettc>
