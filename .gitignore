@@ -39,3 +39,6 @@ __pycache__/
 # Environment files
 *.env
 .env.*
+
+# Local token file
+earthdata_token.txt
