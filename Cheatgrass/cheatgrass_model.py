@@ -48,12 +48,31 @@ class ModelConfig:
     def prepare(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def to_jsonable(self):
+        d = asdict(self)
+        d["data_dir"] = str(self.data_dir)
+        d["output_dir"] = str(self.output_dir)
+        d["device"] = str(self.device)
+        return d
+
+
 
 def set_seed(seed: int):
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+def _json_default(o):
+    if isinstance(o, Path):
+        return str(o)
+    if isinstance(o, torch.device):
+        return str(o)
+    if isinstance(o, np.generic):
+        return o.item()
+    # fall back to str for anything else unexpected
+    return str(o)
+
 
 
 # -----------------------------
@@ -422,6 +441,9 @@ def train(
     best_val = float("inf")
     best_path = cfg.output_dir / f"model_{exp_name}_best.pt"
     train_losses, val_losses = [], []
+    val_dice_hist = []
+    VAL_THRESH = 0.5
+
 
     for epoch in range(cfg.epochs):
         train_ds.set_epoch(epoch)
@@ -445,56 +467,77 @@ def train(
         model.eval()
         run_val, n_bv = 0.0, 0
         val_batch_losses = []
+        val_batch_dice = []
+
         with torch.no_grad():
             for bidx, (data, target) in enumerate(val_loader):
                 data = data.to(cfg.device)
                 target = target.to(cfg.device)
                 logits = model(data)
+
+                # loss
                 loss = criterion(logits.flatten(), target.flatten())
                 val_batch_losses.append(loss.item())
                 run_val += loss.item()
                 n_bv += 1
+
+                # dice @ threshold
+                prob = torch.sigmoid(logits)
+                pred = (prob >= VAL_THRESH).float()
+                d = dice_coeff(pred, target)
+                val_batch_dice.append(d)
+
                 if bidx < 3 and epoch < 3:
-                    print(f"  [val dbg] epoch {epoch} b{bidx}: loss={loss.item():.6f}, "
-                          f"pred=[{logits.min().item():.3f},{logits.max().item():.3f}], "
-                          f"target_sum={target.sum().item()}")
+                    print(
+                        f"  [val dbg] epoch {epoch} b{bidx}: "
+                        f"loss={loss.item():.6f}, dice={d:.4f}, "
+                        f"prob=[{prob.min().item():.3f},{prob.max().item():.3f}], "
+                        f"target_sum={target.sum().item()}"
+                    )
 
         avg_val = run_val / max(1, n_bv)
         val_losses.append(avg_val)
+
+        mean_val_dice = float(np.mean(val_batch_dice)) if val_batch_dice else 0.0
+        val_dice_hist.append(mean_val_dice)
+
 
         if avg_val < best_val:
             best_val = avg_val
             torch.save(model.state_dict(), best_path)
 
         if (epoch == 0) or ((epoch + 1) % 10 == 0):
-            print(f"Epoch {epoch+1:02d} | train {avg_train:.4f} | val {avg_val:.4f} | best {best_val:.4f}")
+            print(f"Epoch {epoch+1:02d} | train {avg_train:.4f} | val {avg_val:.4f} | "
+                f"val_dice {mean_val_dice:.4f} | best {best_val:.4f}")
+
 
     # plot curves
     plt.figure(figsize=(9, 6))
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Val Loss")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
+    plt.plot(val_dice_hist, label="Val Dice")
+    plt.xlabel("Epoch"); plt.grid(True); plt.legend()
     plt.title(f"Training Curves - {exp_name}")
-    plt.grid(True)
-    plt.legend()
     curve_path = cfg.output_dir / f"training_curves_{exp_name}.png"
-    plt.savefig(curve_path, dpi=150)
-    plt.close()
+    plt.savefig(curve_path, dpi=150); plt.close()
+
 
     # Save run manifest
     manifest = {
         "exp_name": exp_name,
         "best_val_loss": float(best_val),
         "best_model_path": str(best_path),
-        "train_losses": train_losses,
-        "val_losses": val_losses,
-        "config": asdict(cfg),
-        "train_ids": train_ids,
-        "val_ids": val_ids,
+        "train_losses": [float(x) for x in train_losses],
+        "val_losses": [float(x) for x in val_losses],
+        "config": cfg.to_jsonable(),
+        "train_ids": list(train_ids),
+        "val_ids": list(val_ids),
     }
     with open(cfg.output_dir / f"run_{exp_name}_manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
+
+
+
 
     print(f"✅ Done. Best val loss={best_val:.4f}. Saved: {best_path.name}, {curve_path.name}")
     return manifest
