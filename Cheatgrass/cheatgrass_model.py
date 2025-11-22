@@ -21,6 +21,9 @@ import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+from datetime import datetime
+import uuid
+
 
 # -----------------------------
 # Config & Utilities
@@ -44,6 +47,10 @@ class ModelConfig:
     # dataloader
     num_workers: int = 0
     pin_memory: bool = False
+
+    # NEW: debugging / verbose options for augmentation/training pipeline
+    verbose: bool = False
+    debug_every_n_batches: int = 50  # print debug crop info every N batches
 
     def prepare(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -72,6 +79,44 @@ def _json_default(o):
         return o.item()
     # fall back to str for anything else unexpected
     return str(o)
+
+# NEW: Ensure nested objects are JSON primitives
+def make_json_safe(obj):
+    """Recursively convert non-JSON primitives to JSON-friendly types."""
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        try:
+            return obj.tolist()
+        except Exception:
+            return [make_json_safe(x) for x in obj.flat]
+    if isinstance(obj, torch.Tensor):
+        try:
+            return obj.detach().cpu().numpy().tolist()
+        except Exception:
+            try:
+                return obj.tolist()
+            except Exception:
+                return str(obj)
+    if isinstance(obj, dict):
+        return {str(k): make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [make_json_safe(v) for v in obj]
+    # Pandas conversions
+    try:
+        import pandas as _pd
+        if isinstance(obj, (_pd.Series, _pd.Index)):
+            return obj.tolist()
+        if isinstance(obj, _pd.DataFrame):
+            return obj.to_dict(orient="records")
+    except Exception:
+        pass
+    # Fallback to string
+    return str(obj)
 
 
 
@@ -178,10 +223,15 @@ def enhanced_random_crop_sample(
     crop_size: int,
     is_training: bool = True,
     force_spatial_diversity: bool = True,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+    debug: bool = False,   # NEW: optional debug return
+) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple[int, int, bool, int]]]:
     t, c, h, w = data.shape
     if h == crop_size and w == crop_size:
-        return data, mask
+        if debug:
+            # no augmentation needed: returns center coords & mask sum
+            mask_sum = int(mask.sum().item())
+            return data, mask, ((h - crop_size)//2, (w - crop_size)//2, False, mask_sum)
+        return data, mask, None
 
     if h < crop_size or w < crop_size:
         pad_h = max(0, crop_size - h)
@@ -193,13 +243,19 @@ def enhanced_random_crop_sample(
     if (is_training and force_spatial_diversity) or (h > crop_size and w > crop_size):
         first_mask = mask[0, 0].detach().cpu().numpy()
         top, left = find_valid_crop_position_enhanced(first_mask, crop_size, force_include_vegetation=True)
+        augmented = True
     else:
         top = (h - crop_size) // 2
         left = (w - crop_size) // 2
+        augmented = False
 
     dc = data[:, :, top : top + crop_size, left : left + crop_size]
     mc = mask[:, :, top : top + crop_size, left : left + crop_size]
-    return dc, mc
+
+    if debug:
+        mask_sum = int(mc.sum().item())
+        return dc, mc, (top, left, bool(augmented), mask_sum)
+    return dc, mc, None
 
 
 # -----------------------------
@@ -273,6 +329,8 @@ class SpatiallyRobustVeduDataset(Dataset):
         enable_augmentation: bool = True,
         crops_per_epoch: int = 1,
         seed: int = 42,
+        verbose: bool = False,
+        debug_every_n_batches: int = 50,
     ):
         self.data_dir = Path(data_dir)
         self.location_ids = [str(g) for g in location_ids]
@@ -282,6 +340,9 @@ class SpatiallyRobustVeduDataset(Dataset):
         self.crops_per_epoch = crops_per_epoch
         self.current_epoch = 0
         self.seed = seed
+        self.verbose = bool(verbose)
+        self.debug_every_n_batches = int(debug_every_n_batches)
+        self.last_debug_info = None  # holds last per-sample debug info
         self.sample_metadata = {gid: load_sample_metadata(self.data_dir, gid) for gid in self.location_ids}
 
     def set_epoch(self, epoch: int):
@@ -306,20 +367,36 @@ class SpatiallyRobustVeduDataset(Dataset):
         elif mask.ndim == 2:
             mask = mask[None, None, ...]    # (1,1,H,W)
 
+        # Convert to tensors (data_t, mask_t)
         data_t = torch.from_numpy(data)
         mask_t = torch.from_numpy(mask)
 
-        if self.enable_augmentation:
-            data_t, mask_t = enhanced_random_crop_sample(
-                data_t, mask_t, self.training_window_size, is_training=self.is_training, force_spatial_diversity=True
+        # Apply enhanced random cropping; return debug info if verbose
+        if self.enable_augmentation or (data_t.shape[2], data_t.shape[3]) != (self.training_window_size, self.training_window_size):
+            dc, mc, debug_info = enhanced_random_crop_sample(
+                data_t, mask_t, self.training_window_size, is_training=self.is_training, force_spatial_diversity=self.enable_augmentation, debug=self.verbose
             )
+            data_t, mask_t = dc, mc
         else:
-            if (data_t.shape[2], data_t.shape[3]) != (self.training_window_size, self.training_window_size):
-                data_t, mask_t = enhanced_random_crop_sample(
-                    data_t, mask_t, self.training_window_size, is_training=False, force_spatial_diversity=False
-                )
+            debug_info = None
+
+        if self.verbose:
+            gid = self.location_ids[sample_idx]
+            top, left, aug_flag, mask_sum = debug_info if debug_info is not None else ((data_t.shape[2]-self.training_window_size)//2, (data_t.shape[3]-self.training_window_size)//2, False, int(mask_t.sum().item()))
+            self.last_debug_info = {
+                "gid": gid,
+                "top": int(top),
+                "left": int(left),
+                "augmentation": bool(aug_flag),
+                "mask_sum_in_crop": int(mask_sum),
+                "crop_size": int(self.training_window_size),
+            }
 
         return data_t, mask_t
+
+    # SMALL HELPER for external inspection
+    def get_last_debug_info(self):
+        return self.last_debug_info
 
 
 # -----------------------------
@@ -365,6 +442,8 @@ def make_dataloaders(
         enable_augmentation=cfg.enable_augmentation,
         crops_per_epoch=train_crops_per_epoch,
         seed=cfg.seed,
+        verbose=cfg.verbose,
+        debug_every_n_batches=cfg.debug_every_n_batches,
     )
     val_ds = SpatiallyRobustVeduDataset(
         cfg.data_dir,
@@ -374,6 +453,8 @@ def make_dataloaders(
         enable_augmentation=True,
         crops_per_epoch=cfg.validation_crops_per_sample,
         seed=cfg.seed + 1,
+        verbose=cfg.verbose,
+        debug_every_n_batches=cfg.debug_every_n_batches,
     )
     train_loader = DataLoader(
         train_ds, batch_size=cfg.batch_size, shuffle=True,
@@ -420,6 +501,14 @@ def train(
     cfg.prepare()
     set_seed(cfg.seed)
 
+    # --- NEW: unique per-run id & derived artifact names ---
+    run_id = datetime.now().strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
+    base_name = f"model_{exp_name}_{run_id}"
+    best_path = cfg.output_dir / f"{base_name}_best.pt"
+    curve_path = cfg.output_dir / f"training_curves_{base_name}.png"
+    manifest_path = cfg.output_dir / f"run_{base_name}_manifest.json"
+    print(f"Run ID: {run_id} | saving model as: {best_path.name}")
+
     # discover IDs if not supplied
     if train_ids is None or val_ids is None:
         all_ids = discover_ids(cfg.data_dir)
@@ -439,7 +528,7 @@ def train(
     optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
     best_val = float("inf")
-    best_path = cfg.output_dir / f"model_{exp_name}_best.pt"
+    # removed: old best_path assignment (now handled above with unique name)
     train_losses, val_losses = [], []
     val_dice_hist = []
     VAL_THRESH = 0.5
@@ -511,35 +600,32 @@ def train(
                 f"val_dice {mean_val_dice:.4f} | best {best_val:.4f}")
 
 
-    # plot curves
+    # plot curves (use unique curve_path)
     plt.figure(figsize=(9, 6))
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Val Loss")
     plt.plot(val_dice_hist, label="Val Dice")
     plt.xlabel("Epoch"); plt.grid(True); plt.legend()
     plt.title(f"Training Curves - {exp_name}")
-    curve_path = cfg.output_dir / f"training_curves_{exp_name}.png"
     plt.savefig(curve_path, dpi=150); plt.close()
 
-
-    # Save run manifest
+    # Save run manifest with run_id and unique model path
     manifest = {
         "exp_name": exp_name,
+        "run_id": run_id,
         "best_val_loss": float(best_val),
         "best_model_path": str(best_path),
+        "training_curves_path": str(curve_path),
         "train_losses": [float(x) for x in train_losses],
         "val_losses": [float(x) for x in val_losses],
         "config": cfg.to_jsonable(),
         "train_ids": list(train_ids),
         "val_ids": list(val_ids),
     }
-    with open(cfg.output_dir / f"run_{exp_name}_manifest.json", "w") as f:
-        json.dump(manifest, f, indent=2)
+    with open(manifest_path, "w") as f:
+        json.dump(make_json_safe(manifest), f, indent=2, default=_json_default)
 
-
-
-
-    print(f"✅ Done. Best val loss={best_val:.4f}. Saved: {best_path.name}, {curve_path.name}")
+    print(f"✅ Done. Run ID: {run_id} | Best val loss={best_val:.4f}. Saved: {best_path.name}, {curve_path.name}")
     return manifest
 
 
@@ -581,8 +667,8 @@ def evaluate(
 
     per_batch = []
     for data, target in tqdm(test_loader, desc="Testing"):
-        data = data.to(cfg.device)      # (B,T,C,32,32)
-        target = target.to(cfg.device)  # (B,T,1,32,32)
+        data = data.to(cfg.device)
+        target = target.to(cfg.device)
         logits = model(data)
         prob = torch.sigmoid(logits)
         pred = (prob >= threshold).float()
@@ -594,18 +680,20 @@ def evaluate(
 
     results = {
         "model_path": str(model_path),
-        "threshold": threshold,
-        "mean_dice": mean_dice,
-        "std_dice": std_dice,
-        "per_batch_dice": per_batch,
-        "n_batches": len(per_batch),
-        "config": asdict(cfg),
-        "test_ids": test_ids,
+        "threshold": float(threshold),
+        "mean_dice": float(mean_dice),
+        "std_dice": float(std_dice),
+        "per_batch_dice": [float(x) for x in per_batch],
+        "n_batches": int(len(per_batch)),
+        "config": cfg.to_jsonable(),
+        "test_ids": [str(t) for t in test_ids],
     }
 
     out_json = cfg.output_dir / f"eval_{Path(model_path).stem}.json"
+    # Make sure everything is JSON-serializable and then write
+    safe_results = make_json_safe(results)
     with open(out_json, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(safe_results, f, indent=2, default=_json_default)
     print(f"📊 Eval mean Dice={mean_dice:.4f} (±{std_dice:.4f})  -> {out_json.name}")
 
     return results
