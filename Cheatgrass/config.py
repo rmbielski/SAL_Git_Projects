@@ -1,0 +1,10 @@
+# config.py
+
+# === EARTHDATA / HLS CONFIG ===
+# NOTE: Treat this as a secret. Don't commit to public GitHub.
+EARTHDATA_LOGIN_TOKEN = "eyJ0eXAiOiJKV1QiLCJvcmlnaW4iOiJFYXJ0aGRhdGEgTG9naW4iLCJzaWciOiJlZGxqd3RwdWJrZXlfb3BzIiwiYWxnIjoiUlMyNTYifQ.eyJ0eXBlIjoiVXNlciIsInVpZCI6InJ1c3RpbmJpZWxza2kiLCJleHAiOjE3NzAwNTk0MzMsImlhdCI6MTc2NDg3NTQzMywiaXNzIjoiaHR0cHM6Ly91cnMuZWFydGhkYXRhLm5hc2EuZ292IiwiaWRlbnRpdHlfcHJvdmlkZXIiOiJlZGxfb3BzIiwiYWNyIjoiZWRsIiwiYXNzdXJhbmNlX2xldmVsIjozfQ.4iF2QMd0-4f2EA9NePVlZG14l9O0wB2fWUW6O5iVlbe8tD6_EV15LGFOqYKVmJ6mXYTMJFsJ5h9iDBk64RPtiIHaSnEijSj2LFxM9vW7VuF2dvDTEBQecr1uZQDCWkq7-IAw-YVk6JWoaX2N2sXbhHlJg1h3O9Jt9I1IY7N4TNhpWt2i2BFgEHVtRYFtR_5STb56UgQLleM91XXNKSWu3dCYsEof9rgytouvgbDfIiSu2UUbT2GlWopfucEWLqBGdHjY2ZvccO3ed0d2MGmPHqGR9_YCs0z5otsLEQkKOka5OqnQlLVCwdGQt9nNnzAPYKl8AvSnx4Of3m-kjkFKog"
+
+# (Optional) You can centralize other stuff later, e.g.:
+# INPUT_PATH = "/path/to/your/master_cheatgrass_file.geojson"
+# TENSOR_DIR = "/home/rbielski/SAL_Git_Projects/Cheatgrass/cheatgrass_data"
+# etc.

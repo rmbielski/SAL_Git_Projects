@@ -140,6 +140,43 @@ class FocalTverskyLoss(nn.Module):
         tversky = tp / (tp + self.alpha * fp + self.beta * fn + self.eps)
         return (1 - tversky) ** self.gamma
 
+# NEW: Weighted BCE with logits
+class WeightedBCEWithLogitsLoss(nn.Module):
+    def __init__(self, pos_weight: float = 1.0, neg_weight: float = 1.0):
+        super().__init__()
+        self.pos_weight = pos_weight
+        self.neg_weight = neg_weight
+
+    def forward(self, logits, targets):
+        # logits, targets flattened equally
+        probs = torch.sigmoid(logits)
+        loss_pos = -targets * torch.log(probs + 1e-6) * self.pos_weight
+        loss_neg = -(1 - targets) * torch.log(1 - probs + 1e-6) * self.neg_weight
+        return (loss_pos + loss_neg).mean()
+
+# NEW: Combo loss (Tversky + Weighted BCE)
+class ComboLoss(nn.Module):
+    def __init__(self, alpha=0.7, beta=0.3, gamma=1.0, bce_pos=1.0, bce_neg=3.0, mix=0.5):
+        super().__init__()
+        self.tversky = FocalTverskyLoss(alpha=alpha, beta=beta, gamma=gamma)
+        self.bce = WeightedBCEWithLogitsLoss(pos_weight=bce_pos, neg_weight=bce_neg)
+        self.mix = mix  # 0..1; 1=tversky only
+
+    def forward(self, logits, targets, valid_mask: Optional[torch.Tensor] = None):
+        ft = logits.flatten()
+        tt = targets.flatten()
+        if valid_mask is not None:
+            vm = valid_mask.flatten()
+            keep = vm > 0.5
+            if not keep.any():
+                return logits.new_tensor(0.0)
+            ft = ft[keep]
+            tt = tt[keep]
+        return self.mix * self.tversky(ft, tt) + (1 - self.mix) * self.bce(ft, tt)
+
+# Tiny sparsity regularizer weight
+SPARSITY_LAMBDA = 1e-4  # softened: allow higher probabilities
+
 
 # -----------------------------
 # Cropping helpers
@@ -216,33 +253,69 @@ def find_valid_crop_position_enhanced(
 
     return (h - crop_size) // 2, (w - crop_size) // 2
 
+# NEW: explicit pure-background crop finder
+def find_pure_background_crop(
+    mask: np.ndarray,
+    crop_size: int,
+    max_attempts: int = 100,
+) -> Tuple[int, int]:
+    """Return a crop with zero positive pixels if possible; else random."""
+    h, w = mask.shape
+    if h <= crop_size or w <= crop_size:
+        return 0, 0
+    for _ in range(max_attempts):
+        top = random.randint(0, h - crop_size)
+        left = random.randint(0, w - crop_size)
+        if mask[top:top+crop_size, left:left+crop_size].sum() == 0:
+            return top, left
+    # fallback random
+    top = random.randint(0, h - crop_size)
+    left = random.randint(0, w - crop_size)
+    return top, left
+
 
 def enhanced_random_crop_sample(
-    data: torch.Tensor,  # (T, C, H, W)
-    mask: torch.Tensor,  # (T, 1, H, W) or (1, 1, H, W)
+    data: torch.Tensor,   # (T, C, H, W)
+    mask: torch.Tensor,   # (T, 1, H, W) or (1, 1, H, W)
     crop_size: int,
     is_training: bool = True,
     force_spatial_diversity: bool = True,
-    debug: bool = False,   # NEW: optional debug return
-) -> Tuple[torch.Tensor, torch.Tensor, Optional[Tuple[int, int, bool, int]]]:
+    debug: bool = False,
+    # NEW: allow overriding force_include_vegetation to enable negative crops
+    force_include_vegetation: Optional[bool] = None,
+    valid: Optional[torch.Tensor] = None,  # (T,1,H,W) or (1,1,H,W)
+) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[Tuple[int, int, bool, int]]]:
     t, c, h, w = data.shape
     if h == crop_size and w == crop_size:
         if debug:
             # no augmentation needed: returns center coords & mask sum
             mask_sum = int(mask.sum().item())
-            return data, mask, ((h - crop_size)//2, (w - crop_size)//2, False, mask_sum)
-        return data, mask, None
+            if valid is not None:
+                return data, mask, valid, ((h - crop_size)//2, (w - crop_size)//2, False, mask_sum)
+            return data, mask, None, ((h - crop_size)//2, (w - crop_size)//2, False, mask_sum)
+        if valid is not None:
+            return data, mask, valid, None
+        return data, mask, None, None
 
     if h < crop_size or w < crop_size:
         pad_h = max(0, crop_size - h)
         pad_w = max(0, crop_size - w)
         data = torch.nn.functional.pad(data, (0, pad_w, 0, pad_h))
         mask = torch.nn.functional.pad(mask, (0, pad_w, 0, pad_h))
+        if valid is not None:
+            valid = torch.nn.functional.pad(valid, (0, pad_w, 0, pad_h))
         _, _, h, w = data.shape
 
     if (is_training and force_spatial_diversity) or (h > crop_size and w > crop_size):
         first_mask = mask[0, 0].detach().cpu().numpy()
-        top, left = find_valid_crop_position_enhanced(first_mask, crop_size, force_include_vegetation=True)
+        # if force_include_vegetation is None -> default True (prior behavior)
+        must_include = True if force_include_vegetation is None else bool(force_include_vegetation)
+        if must_include:
+            top, left = find_valid_crop_position_enhanced(
+                first_mask, crop_size, force_include_vegetation=True
+            )
+        else:
+            top, left = find_pure_background_crop(first_mask, crop_size)
         augmented = True
     else:
         top = (h - crop_size) // 2
@@ -251,11 +324,14 @@ def enhanced_random_crop_sample(
 
     dc = data[:, :, top : top + crop_size, left : left + crop_size]
     mc = mask[:, :, top : top + crop_size, left : left + crop_size]
+    vc = None
+    if valid is not None:
+        vc = valid[:, :, top : top + crop_size, left : left + crop_size]
 
     if debug:
         mask_sum = int(mc.sum().item())
-        return dc, mc, (top, left, bool(augmented), mask_sum)
-    return dc, mc, None
+        return dc, mc, vc, (top, left, bool(augmented), mask_sum)
+    return dc, mc, vc, None
 
 
 # -----------------------------
@@ -331,6 +407,8 @@ class SpatiallyRobustVeduDataset(Dataset):
         seed: int = 42,
         verbose: bool = False,
         debug_every_n_batches: int = 50,
+        # NEW: probability to take a pure-background crop (no forced vegetation)
+        negative_crop_prob: float = 0.3,
     ):
         self.data_dir = Path(data_dir)
         self.location_ids = [str(g) for g in location_ids]
@@ -344,6 +422,7 @@ class SpatiallyRobustVeduDataset(Dataset):
         self.debug_every_n_batches = int(debug_every_n_batches)
         self.last_debug_info = None  # holds last per-sample debug info
         self.sample_metadata = {gid: load_sample_metadata(self.data_dir, gid) for gid in self.location_ids}
+        self.negative_crop_prob = float(negative_crop_prob)
 
     def set_epoch(self, epoch: int):
         self.current_epoch = epoch
@@ -359,24 +438,40 @@ class SpatiallyRobustVeduDataset(Dataset):
 
         data = np.load(self.data_dir / f"{gid}_data.npy").astype(np.float32)  # (T,H,W,C)
         mask = np.load(self.data_dir / f"{gid}_mask.npy").astype(np.float32)  # (T,H,W) or (H,W)
-
-        data = np.transpose(data, (0, 3, 1, 2))  # (T,C,H,W)
-
+        # NEW: validity mask
+        valid_path = self.data_dir / f"{gid}_valid.npy"
+        if valid_path.exists():
+            valid = np.load(valid_path).astype(np.float32)  # (T,H,W) or (H,W)
+        else:
+            valid = np.ones_like(mask, dtype=np.float32)
+        # Reorder data
+        data = np.transpose(data, (0, 3, 1, 2))
         if mask.ndim == 3:
-            mask = np.expand_dims(mask, 1)  # (T,1,H,W)
+            mask = np.expand_dims(mask, 1)
         elif mask.ndim == 2:
-            mask = mask[None, None, ...]    # (1,1,H,W)
+            mask = mask[None, None, ...]
+        if valid.ndim == 3:
+            valid = np.expand_dims(valid, 1)
+        elif valid.ndim == 2:
+            valid = valid[None, None, ...]
 
-        # Convert to tensors (data_t, mask_t)
         data_t = torch.from_numpy(data)
         mask_t = torch.from_numpy(mask)
+        valid_t = torch.from_numpy(valid)
 
-        # Apply enhanced random cropping; return debug info if verbose
         if self.enable_augmentation or (data_t.shape[2], data_t.shape[3]) != (self.training_window_size, self.training_window_size):
-            dc, mc, debug_info = enhanced_random_crop_sample(
-                data_t, mask_t, self.training_window_size, is_training=self.is_training, force_spatial_diversity=self.enable_augmentation, debug=self.verbose
-            )
-            data_t, mask_t = dc, mc
+            force_include = True
+            if random.random() < self.negative_crop_prob:
+                force_include = False
+            dc, mc, vc, debug_info = enhanced_random_crop_sample(
+                data_t, mask_t, self.training_window_size,
+                is_training=self.is_training,
+                force_spatial_diversity=self.enable_augmentation,
+                debug=self.verbose,
+                force_include_vegetation=force_include,
+                valid=valid_t,
+             )
+            data_t, mask_t, valid_t = dc, mc, vc
         else:
             debug_info = None
 
@@ -392,7 +487,7 @@ class SpatiallyRobustVeduDataset(Dataset):
                 "crop_size": int(self.training_window_size),
             }
 
-        return data_t, mask_t
+        return data_t, mask_t, valid_t
 
     # SMALL HELPER for external inspection
     def get_last_debug_info(self):
@@ -444,17 +539,19 @@ def make_dataloaders(
         seed=cfg.seed,
         verbose=cfg.verbose,
         debug_every_n_batches=cfg.debug_every_n_batches,
+        negative_crop_prob=0.4,   # softer: fewer pure-background crops
     )
     val_ds = SpatiallyRobustVeduDataset(
         cfg.data_dir,
         val_ids,
         training_window_size=cfg.training_window_size,
-        is_training=True,  # random crops for validation for robustness
+        is_training=True,
         enable_augmentation=True,
         crops_per_epoch=cfg.validation_crops_per_sample,
         seed=cfg.seed + 1,
         verbose=cfg.verbose,
         debug_every_n_batches=cfg.debug_every_n_batches,
+        negative_crop_prob=0.5,   # balanced validation
     )
     train_loader = DataLoader(
         train_ds, batch_size=cfg.batch_size, shuffle=True,
@@ -470,8 +567,15 @@ def make_dataloaders(
 # -----------------------------
 # Metrics
 # -----------------------------
-def dice_coeff(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> float:
-    # pred/target: (B,T,1,H,W) in {0,1}
+def dice_coeff(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    eps: float = 1e-6,
+    valid_mask: Optional[torch.Tensor] = None,
+) -> float:
+    if valid_mask is not None:
+        pred = pred * valid_mask
+        target = target * valid_mask
     inter = (pred * target).sum().item()
     denom = pred.sum().item() + target.sum().item() + eps
     return 2.0 * inter / denom
@@ -482,8 +586,14 @@ def dice_coeff(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> f
 # -----------------------------
 def build_model(cfg: ModelConfig) -> nn.Module:
     model = PhenologyAwareUNet(input_bands=cfg.input_bands, hidden_dim=cfg.hidden_dim, output_classes=1)
+    # NEW: bias final conv to prefer background (e.g., p0=0.01)
+    p0 = 0.01
+    b = math.log(p0 / (1 - p0))
+    with torch.no_grad():
+        for m in model.modules():
+            if isinstance(m, nn.Conv2d) and getattr(m, "out_channels", None) == 1 and m.bias is not None:
+                m.bias.fill_(b)
     return model.to(cfg.device)
-
 
 def train(
     cfg: ModelConfig,
@@ -524,15 +634,23 @@ def train(
 
     train_loader, val_loader, train_ds, val_ds = make_dataloaders(cfg, train_ids, val_ids, train_crops_per_epoch)
     model = build_model(cfg)
-    criterion = FocalTverskyLoss(alpha=alpha, beta=beta)
+    # NEW: use ComboLoss (Tversky + weighted BCE)
+    criterion = ComboLoss(
+        alpha=0.7,  # reduce FP penalty
+        beta=0.3,   # relatively more FN attention
+        gamma=1.0,
+        bce_pos=2.0,  # missing positives hurt more
+        bce_neg=1.0,  # stop overweighting negatives
+        mix=0.7       # lean on Tversky for imbalance
+    )
     optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
     best_val = float("inf")
     # removed: old best_path assignment (now handled above with unique name)
     train_losses, val_losses = [], []
     val_dice_hist = []
-    VAL_THRESH = 0.5
-
+    # Track best threshold alongside best model
+    best_epoch_threshold = 0.5
 
     for epoch in range(cfg.epochs):
         train_ds.set_epoch(epoch)
@@ -540,12 +658,16 @@ def train(
 
         model.train()
         run_loss, n_batches = 0.0, 0
-        for data, target in tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.epochs} Train", leave=False):
-            data = data.to(cfg.device)            # (B,T,C,32,32)
-            target = target.to(cfg.device)        # (B,T,1,32,32)
+        for data, target, valid in tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.epochs} Train", leave=False):
+            data, target, valid = data.to(cfg.device), target.to(cfg.device), valid.to(cfg.device)
             optimizer.zero_grad()
-            logits = model(data)                  # (B,T,1,32,32)
-            loss = criterion(logits.flatten(), target.flatten())
+            logits = model(data)
+            prob = torch.sigmoid(logits)
+            if valid.sum() > 0:
+                sparsity_term = SPARSITY_LAMBDA * (prob * valid).sum() / (valid.sum() + 1e-6)
+            else:
+                sparsity_term = 0.0
+            loss = criterion(logits, target, valid_mask=valid) + sparsity_term
             loss.backward()
             optimizer.step()
             run_loss += loss.item()
@@ -553,52 +675,87 @@ def train(
         avg_train = run_loss / max(1, n_batches)
         train_losses.append(avg_train)
 
+        # Validation phase (+ threshold sweep)
         model.eval()
         run_val, n_bv = 0.0, 0
         val_batch_losses = []
         val_batch_dice = []
+        # NEW: collect for threshold sweep
+        all_probs, all_tgts, all_valids = [], [], []
 
         with torch.no_grad():
-            for bidx, (data, target) in enumerate(val_loader):
-                data = data.to(cfg.device)
-                target = target.to(cfg.device)
+            for bidx, (data, target, valid) in enumerate(val_loader):
+                data, target, valid = data.to(cfg.device), target.to(cfg.device), valid.to(cfg.device)
                 logits = model(data)
 
-                # loss
-                loss = criterion(logits.flatten(), target.flatten())
-                val_batch_losses.append(loss.item())
-                run_val += loss.item()
+                # loss (no sparsity in val)
+                vloss = criterion(logits, target, valid_mask=valid)
+                val_batch_losses.append(vloss.item())
+                run_val += vloss.item()
                 n_bv += 1
 
-                # dice @ threshold
                 prob = torch.sigmoid(logits)
-                pred = (prob >= VAL_THRESH).float()
-                d = dice_coeff(pred, target)
+                # collect for threshold sweep
+                all_probs.append(prob.detach().cpu().flatten())
+                all_tgts.append(target.detach().cpu().flatten())
+                all_valids.append(valid.detach().cpu().flatten())  # NEW: collect valid mask
+
+                # Dice at 0.5 (reporting)
+                pred05 = (prob >= 0.5).float()
+                d = dice_coeff(pred05, target, valid_mask=valid)
                 val_batch_dice.append(d)
 
                 if bidx < 3 and epoch < 3:
                     print(
                         f"  [val dbg] epoch {epoch} b{bidx}: "
-                        f"loss={loss.item():.6f}, dice={d:.4f}, "
+                        f"loss={vloss.item():.6f}, dice@0.5={d:.4f}, "
                         f"prob=[{prob.min().item():.3f},{prob.max().item():.3f}], "
                         f"target_sum={target.sum().item()}"
                     )
+                if bidx == 0:  # calibration snapshot
+                    avg_p = prob.mean().item()
+                    frac_over_05 = (prob >= 0.5).float().mean().item()
+                    print(f"    [val stats] avg_p={avg_p:.3f}, frac>0.5={frac_over_05:.3f}")
 
         avg_val = run_val / max(1, n_bv)
         val_losses.append(avg_val)
 
+        # NEW: threshold sweep to maximize Dice on validation
+        if all_probs:
+            probs_cat = torch.cat(all_probs)
+            tgts_cat = torch.cat(all_tgts)
+            vmask_cat = torch.cat(all_valids)
+            keep = vmask_cat > 0.5
+            if keep.any():
+                probs_cat = probs_cat[keep]
+                tgts_cat  = tgts_cat[keep]
+                ths = torch.linspace(0.05, 0.95, steps=19)
+                epoch_best_thresh, epoch_best_dice = 0.5, 0.0
+                for t in ths:
+                    pred = (probs_cat >= t).float()
+                    inter = (pred * tgts_cat).sum().item()
+                    denom = pred.sum().item() + tgts_cat.sum().item() + 1e-6
+                    d = 2.0 * inter / denom
+                    if d > epoch_best_dice:
+                        epoch_best_dice, epoch_best_thresh = float(d), float(t)
+            else:
+                epoch_best_thresh, epoch_best_dice = 0.5, 0.0
+            print(f"  [val] epoch {epoch+1}: best_thresh={epoch_best_thresh:.2f}, best_dice={epoch_best_dice:.4f}")
+        else:
+            epoch_best_thresh, epoch_best_dice = 0.5, 0.0
+
         mean_val_dice = float(np.mean(val_batch_dice)) if val_batch_dice else 0.0
         val_dice_hist.append(mean_val_dice)
 
-
+        # Save best model (by val loss) and remember its threshold
         if avg_val < best_val:
             best_val = avg_val
+            best_epoch_threshold = epoch_best_thresh  # NEW: keep threshold with best model
             torch.save(model.state_dict(), best_path)
 
         if (epoch == 0) or ((epoch + 1) % 10 == 0):
             print(f"Epoch {epoch+1:02d} | train {avg_train:.4f} | val {avg_val:.4f} | "
-                f"val_dice {mean_val_dice:.4f} | best {best_val:.4f}")
-
+                f"val_dice@0.5 {mean_val_dice:.4f} | best {best_val:.4f}")
 
     # plot curves (use unique curve_path)
     plt.figure(figsize=(9, 6))
@@ -609,12 +766,14 @@ def train(
     plt.title(f"Training Curves - {exp_name}")
     plt.savefig(curve_path, dpi=150); plt.close()
 
-    # Save run manifest with run_id and unique model path
+    # Save run manifest with run_id, unique model path, and best threshold
     manifest = {
         "exp_name": exp_name,
         "run_id": run_id,
         "best_val_loss": float(best_val),
         "best_model_path": str(best_path),
+        # NEW: persist best threshold for this trained checkpoint
+        "best_threshold": float(best_epoch_threshold),
         "training_curves_path": str(curve_path),
         "train_losses": [float(x) for x in train_losses],
         "val_losses": [float(x) for x in val_losses],
@@ -625,19 +784,45 @@ def train(
     with open(manifest_path, "w") as f:
         json.dump(make_json_safe(manifest), f, indent=2, default=_json_default)
 
-    print(f"✅ Done. Run ID: {run_id} | Best val loss={best_val:.4f}. Saved: {best_path.name}, {curve_path.name}")
+    print(f"✅ Done. Run ID: {run_id} | Best val loss={best_val:.4f}. "
+          f"Saved: {best_path.name}, {curve_path.name} | best_thresh={best_epoch_threshold:.2f}")
     return manifest
 
 
 # -----------------------------
 # Evaluation / Testing
 # -----------------------------
+
+# NEW: helper to find and load the manifest matching a model checkpoint
+def _find_manifest_for_model(model_path: Path, output_dir: Path) -> Optional[Dict[str, Any]]:
+    try:
+        # First try a direct name guess
+        guess = output_dir / f"run_{model_path.stem.replace('_best', '')}_manifest.json"
+        if guess.exists():
+            with open(guess, "r") as f:
+                return json.load(f)
+
+        # Fallback: scan manifests and match by best_model_path filename
+        for m in sorted(output_dir.glob("run_*_manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                obj = json.loads(m.read_text())
+                bm = obj.get("best_model_path")
+                if bm:
+                    # match by full path or by filename
+                    if str(model_path) == bm or Path(bm).name == Path(model_path).name:
+                        return obj
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
 @torch.no_grad()
 def evaluate(
     cfg: ModelConfig,
     model_path: Path,
     test_ids: List[str],
-    threshold: float = 0.5,
+    threshold: Optional[float] = 0.5,   # allow None to auto-pick from manifest
     crops_per_sample: int = 3,
 ) -> Dict[str, Any]:
     """
@@ -647,18 +832,35 @@ def evaluate(
     cfg.prepare()
     set_seed(cfg.seed + 999)
 
+    # Resolve threshold: use manifest best_threshold if threshold is None
+    thr_to_use = 0.5 if threshold is None else float(threshold)
+    if threshold is None:
+        man = _find_manifest_for_model(Path(model_path), cfg.output_dir)
+        if man is not None and man.get("best_threshold") is not None:
+            try:
+                thr_to_use = float(man["best_threshold"])
+                print(f"Using threshold from manifest: {thr_to_use:.2f}")
+            except Exception:
+                pass
+
+    # Build and load model weights safely
     model = build_model(cfg)
-    model.load_state_dict(torch.load(model_path, map_location=cfg.device))
+    state = torch.load(model_path, map_location=cfg.device)
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    model.load_state_dict(state)
     model.eval()
 
+    # Build test dataset/loader (allow some pure-negative crops)
     test_ds = SpatiallyRobustVeduDataset(
         cfg.data_dir,
         test_ids,
         training_window_size=cfg.training_window_size,
-        is_training=False,            # no explicit "training" aug flags—but we still use crops
-        enable_augmentation=True,     # random crops to assess robustness
+        is_training=False,
+        enable_augmentation=True,
         crops_per_epoch=crops_per_sample,
         seed=cfg.seed + 2,
+        negative_crop_prob=0.5,       # moderate negative sampling at test time
     )
     test_loader = DataLoader(
         test_ds, batch_size=cfg.batch_size, shuffle=False,
@@ -666,13 +868,12 @@ def evaluate(
     )
 
     per_batch = []
-    for data, target in tqdm(test_loader, desc="Testing"):
-        data = data.to(cfg.device)
-        target = target.to(cfg.device)
+    for data, target, valid in tqdm(test_loader, desc="Testing"):
+        data, target, valid = data.to(cfg.device), target.to(cfg.device), valid.to(cfg.device)
         logits = model(data)
         prob = torch.sigmoid(logits)
-        pred = (prob >= threshold).float()
-        d = dice_coeff(pred, target)
+        pred = (prob >= thr_to_use).float()
+        d = dice_coeff(pred, target, valid_mask=valid)
         per_batch.append(d)
 
     mean_dice = float(np.mean(per_batch)) if per_batch else 0.0
@@ -680,7 +881,7 @@ def evaluate(
 
     results = {
         "model_path": str(model_path),
-        "threshold": float(threshold),
+        "threshold": float(thr_to_use),
         "mean_dice": float(mean_dice),
         "std_dice": float(std_dice),
         "per_batch_dice": [float(x) for x in per_batch],
@@ -690,7 +891,6 @@ def evaluate(
     }
 
     out_json = cfg.output_dir / f"eval_{Path(model_path).stem}.json"
-    # Make sure everything is JSON-serializable and then write
     safe_results = make_json_safe(results)
     with open(out_json, "w") as f:
         json.dump(safe_results, f, indent=2, default=_json_default)
