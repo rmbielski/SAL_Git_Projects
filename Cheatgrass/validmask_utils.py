@@ -29,8 +29,16 @@ def _discover_data_files(split_dir: Path):
     return sorted(split_dir.glob("*_data.npy"))
 
 
+def _as_bool(val, default=False) -> bool:
+    if val is None:
+        return default
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _compute_valid_mask(data: np.ndarray, nodata_value: float) -> np.ndarray:
     """Return uint8 validity mask for (T,H,W,C) data."""
+    if data.ndim != 4:
+        raise ValueError(f"Expected data with 4 dims (T,H,W,C), got shape {data.shape}")
     finite = np.isfinite(data).all(axis=-1)      # (T,H,W)
     not_nodata = (data > (nodata_value + 1e-3)).all(axis=-1)  # reject sentinel fills like -9999
     nonzero = (np.abs(data).sum(axis=-1) > 0.0)  # reject all-zero slices
@@ -41,6 +49,7 @@ def build_validmask_dataset(
     src_root: str | Path | None = None,
     dst_root: str | Path | None = None,
     nodata_value: float | None = None,
+    reset_dst: bool | None = None,
 ) -> int:
     """
     Clone *_data.npy / *_mask.npy tree and add *_valid.npy files.
@@ -53,10 +62,18 @@ def build_validmask_dataset(
     src_root = Path(os.getenv("CHEATGRASS_SRC_ROOT", src_root or DEFAULT_SRC_ROOT))
     dst_root = Path(os.getenv("CHEATGRASS_VALID_ROOT", dst_root or DEFAULT_VALID_ROOT))
     nodata_value = float(os.getenv("CHEATGRASS_NODATA_VALUE", nodata_value if nodata_value is not None else DEFAULT_NODATA))
+    if reset_dst is None:
+        reset_dst = _as_bool(os.getenv("CHEATGRASS_RESET_VALID_DST"), default=False)
+    else:
+        reset_dst = _as_bool(reset_dst, default=bool(reset_dst))
 
     print("\n--- Building validity-mask dataset ---")
     print(f"Source root:      {src_root}")
     print(f"Destination root: {dst_root}")
+
+    if reset_dst and dst_root.exists():
+        shutil.rmtree(dst_root)
+
     dst_root.mkdir(parents=True, exist_ok=True)
 
     if not src_root.exists():

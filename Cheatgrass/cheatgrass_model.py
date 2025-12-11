@@ -35,12 +35,16 @@ class ModelConfig:
     batch_size: int = 1
     learning_rate: float = 1e-4
     epochs: int = 50
-    hidden_dim: int = 128
+    hidden_dim: int = 256  # more capacity for temporal modeling
+    lstm_layers: int = 2
+    lstm_dropout: float = 0.1
+    attn_heads: int = 8
     input_bands: int = 6
     train_val_split_size: float = 0.2
     training_window_size: int = 32
     enable_augmentation: bool = True
-    validation_crops_per_sample: int = 3
+    train_crops_per_sample: int = 100
+    validation_crops_per_sample: int = 100
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # reproducibility
     seed: int = 42
@@ -343,25 +347,53 @@ class PhenologyAwareUNet(nn.Module):
     Sequence model: per-time-step 2D CNN -> sequence LSTM -> per-step decoder.
     Expects spatial crop 32x32.
     """
-    def __init__(self, input_bands: int = 6, hidden_dim: int = 128, output_classes: int = 1):
+    def __init__(
+        self,
+        input_bands: int = 6,
+        hidden_dim: int = 256,
+        output_classes: int = 1,
+        lstm_layers: int = 2,
+        lstm_dropout: float = 0.1,
+        attn_heads: int = 8,
+    ):
         super().__init__()
         self.feature_cnn = nn.Sequential(
-            nn.Conv2d(input_bands, 32, kernel_size=3, stride=1, padding=0), nn.ReLU(True),  # 32 -> 30
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=0), nn.ReLU(True),          # 30 -> 28
+            nn.Conv2d(input_bands, 64, kernel_size=3, stride=1, padding=0), nn.ReLU(True),  # 32 -> 30
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0), nn.ReLU(True),          # 30 -> 28
             nn.MaxPool2d(kernel_size=2, stride=2),                                         # 28 -> 14
         )
-        fs = 64 * 14 * 14  # flattened feature per-time-step
-        self.lstm = nn.LSTM(fs, hidden_dim, batch_first=True, bidirectional=True)
+        fs = 128 * 14 * 14  # flattened feature per-time-step
+        attn_dim = hidden_dim * 2
+        # pick a valid head count
+        if attn_dim % attn_heads != 0:
+            attn_heads = 1 if attn_dim < 4 else max(1, attn_dim // 64)
+            while attn_dim % attn_heads != 0 and attn_heads > 1:
+                attn_heads -= 1
+
+        self.lstm = nn.LSTM(
+            fs,
+            hidden_dim,
+            num_layers=lstm_layers,
+            dropout=lstm_dropout if lstm_layers > 1 else 0.0,
+            batch_first=True,
+            bidirectional=True,
+        )
+        self.temporal_attn = nn.MultiheadAttention(
+            embed_dim=attn_dim,
+            num_heads=attn_heads,
+            dropout=lstm_dropout,
+            batch_first=True,
+        )
         self.proj = nn.Linear(hidden_dim * 2, fs)
 
         self.decoder = nn.Sequential(
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
             nn.ReLU(True),
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # 14 -> 28
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # 14 -> 28
             nn.ReLU(True),
-            nn.ConvTranspose2d(32, 32, kernel_size=5, stride=1, padding=0),  # 28 -> 32
+            nn.ConvTranspose2d(64, 64, kernel_size=5, stride=1, padding=0),  # 28 -> 32
             nn.ReLU(True),
-            nn.Conv2d(32, output_classes, kernel_size=1),
+            nn.Conv2d(64, output_classes, kernel_size=1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -377,10 +409,12 @@ class PhenologyAwareUNet(nn.Module):
 
         seq = torch.stack(cnn_list, 1)  # (B, T, fs)
         lstm_out, _ = self.lstm(seq)    # (B, T, 2*hidden)
+        attn_out, _ = self.temporal_attn(lstm_out, lstm_out, lstm_out)
+        fused = lstm_out + attn_out
 
         outs = []
         for i in range(t):
-            p = self.proj(lstm_out[:, i]).view(b, 64, 14, 14)
+            p = self.proj(fused[:, i]).view(b, 128, 14, 14)
             d = self.decoder(p)  # (B, 1, 32, 32)
             outs.append(d)
         return torch.stack(outs, 1)  # (B, T, 1, 32, 32)
@@ -528,8 +562,9 @@ def make_dataloaders(
     cfg: ModelConfig,
     train_ids: List[str],
     val_ids: List[str],
-    train_crops_per_epoch: int = 3,
+    train_crops_per_epoch: Optional[int] = None,
 ) -> Tuple[DataLoader, DataLoader, SpatiallyRobustVeduDataset, SpatiallyRobustVeduDataset]:
+    train_crops_per_epoch = cfg.train_crops_per_sample if train_crops_per_epoch is None else train_crops_per_epoch
     train_ds = SpatiallyRobustVeduDataset(
         cfg.data_dir,
         train_ids,
@@ -586,7 +621,14 @@ def dice_coeff(
 # Training
 # -----------------------------
 def build_model(cfg: ModelConfig) -> nn.Module:
-    model = PhenologyAwareUNet(input_bands=cfg.input_bands, hidden_dim=cfg.hidden_dim, output_classes=1)
+    model = PhenologyAwareUNet(
+        input_bands=cfg.input_bands,
+        hidden_dim=cfg.hidden_dim,
+        output_classes=1,
+        lstm_layers=cfg.lstm_layers,
+        lstm_dropout=cfg.lstm_dropout,
+        attn_heads=cfg.attn_heads,
+    )
     # NEW: bias final conv to prefer background (e.g., p0=0.01)
     p0 = 0.01
     b = math.log(p0 / (1 - p0))
@@ -603,7 +645,7 @@ def train(
     beta: float = 0.5,
     train_ids: Optional[List[str]] = None,
     val_ids: Optional[List[str]] = None,
-    train_crops_per_epoch: int = 3,
+    train_crops_per_epoch: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Trains a model. If train_ids/val_ids are None, they are discovered & split.
@@ -611,6 +653,7 @@ def train(
     """
     cfg.prepare()
     set_seed(cfg.seed)
+    train_crops_per_epoch = cfg.train_crops_per_sample if train_crops_per_epoch is None else train_crops_per_epoch
 
     # --- NEW: unique per-run id & derived artifact names ---
     run_id = datetime.now().strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
@@ -630,7 +673,10 @@ def train(
     print("=" * 70)
     print(f"Experiment: {exp_name}")
     print(f"Device: {cfg.device}; Window: {cfg.training_window_size}x{cfg.training_window_size}")
-    print(f"Train: {len(train_ids)} | Val: {len(val_ids)} | Val crops/sample: {cfg.validation_crops_per_sample}")
+    print(
+        f"Train: {len(train_ids)} | Val: {len(val_ids)} | "
+        f"Train crops/sample: {train_crops_per_epoch} | Val crops/sample: {cfg.validation_crops_per_sample}"
+    )
     print("=" * 70)
 
     train_loader, val_loader, train_ds, val_ds = make_dataloaders(cfg, train_ids, val_ids, train_crops_per_epoch)
