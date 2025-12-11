@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 import re
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 from urllib3.util.retry import Retry  # added
@@ -81,9 +81,24 @@ MIN_VALID_FRACTION_PATCH = 0.6   # overall patch valid fraction to keep a slice
 MIN_VALID_FRACTION_POLY = 0.7    # valid fraction inside polygon mask
 DATE_RANGE_START = "2024-05-01"
 DATE_RANGE_END   = "2024-10-31"
+TIME_GRID_STEP_DAYS = 14  # canonical bin size
 OUTPUT_DIR = Path("cheatgrass_data")  # align with VEDU tooling
 OUTPUT_DIR.mkdir(exist_ok=True)
 REQUEST_SLEEP = 0.5  # align with VEDU
+
+# Build canonical time grid (inclusive of start/end)
+def build_time_grid(start_date: str, end_date: str, step_days: int = TIME_GRID_STEP_DAYS):
+    start = datetime.fromisoformat(start_date)
+    end   = datetime.fromisoformat(end_date)
+    dates = []
+    d = start
+    while d <= end:
+        dates.append(d.strftime("%Y-%m-%d"))
+        d += timedelta(days=step_days)
+    return dates
+
+TIME_GRID = build_time_grid(DATE_RANGE_START, DATE_RANGE_END, step_days=TIME_GRID_STEP_DAYS)
+print(f"TIME GRID: {len(TIME_GRID)} bins from {TIME_GRID[0]} to {TIME_GRID[-1]}")
 
 # URL helper to handle S3 links gracefully
 def to_https_if_s3(url: str) -> str:
@@ -268,23 +283,48 @@ def process_unique_polygon_list(unique_polygons_gdf: gpd.GeoDataFrame):
                 summary['skipped'] += 1
                 continue
 
-            obs_data, obs_masks = [], []
+            # Prepare calendar-aligned tensors for every time bin
+            Tgrid = len(TIME_GRID)
+            data_arr  = np.full((Tgrid, ctx_size, ctx_size, len(BANDS_OF_INTEREST)), NODATA_SENTINEL, dtype=np.float32)
+            mask_arr  = np.zeros((Tgrid, ctx_size, ctx_size), dtype=np.uint8)
+            valid_arr = np.zeros((Tgrid, ctx_size, ctx_size), dtype=np.float32)
+
             skipped_partial = 0
             skipped_contaminated = 0
             skipped_invalid = 0
+            obs_kept = 0
 
-            for date, band_urls in sorted(granule_dates.items()):
-                # Light per-date heartbeat for first two polygons only
+            # Map acquisition dates to nearest time grid slot (within half the bin)
+            slot_for_date = {}
+            for dt_str in granule_dates.keys():
+                try:
+                    dt = datetime.fromisoformat(dt_str)
+                except Exception:
+                    continue
+                diffs = [abs((dt - datetime.fromisoformat(g)).days) for g in TIME_GRID]
+                if not diffs:
+                    continue
+                idx = int(np.argmin(diffs))
+                if diffs[idx] <= TIME_GRID_STEP_DAYS // 2 + 1:
+                    if idx not in slot_for_date or diffs[idx] < slot_for_date[idx][1]:
+                        slot_for_date[idx] = (dt_str, diffs[idx])
+
+            static_mask = None
+
+            for t_idx, target in enumerate(TIME_GRID):
+                if t_idx not in slot_for_date:
+                    continue
+                date_str = slot_for_date[t_idx][0]
+                band_urls = granule_dates.get(date_str, {})
                 if pos < 2:
-                    print(f"    date {date}: start", flush=True)
+                    print(f"    slot {t_idx} ({target}) using {date_str}: start", flush=True)
                 if "Fmask" not in band_urls:
                     continue
-                fmask_chip, _, _ = download_and_extract_data(band_urls['Fmask'], geom, ctx_size)
+                fmask_chip, f_tr, f_crs = download_and_extract_data(band_urls['Fmask'], geom, ctx_size)
                 if fmask_chip is None:
                     last_debug = {'step': 'fmask_none'}
                     skipped_partial += 1; continue
                 fmask_arr = np.asarray(fmask_chip)
-                # guard against degenerate shapes
                 if fmask_arr.ndim != 2 or fmask_arr.shape[0] == 0 or fmask_arr.shape[1] == 0:
                     last_debug = {'step': 'fmask_shape', 'fmask_shape': getattr(fmask_arr, 'shape', None)}
                     skipped_partial += 1; continue
@@ -309,8 +349,11 @@ def process_unique_polygon_list(unique_polygons_gdf: gpd.GeoDataFrame):
                     if final_tr is None: final_tr, final_crs = tr, crs
                 if not all_ok or final_tr is None:
                     skipped_partial += 1; continue
-                chip = np.stack(bands_stack, axis=-1)
-                mask = create_segmentation_mask(geom, final_tr, final_crs, ctx_size)
+                chip = np.stack(bands_stack, axis=-1)  # (H,W,C)
+
+                if static_mask is None:
+                    static_mask = create_segmentation_mask(geom, final_tr, final_crs, ctx_size)
+                mask = static_mask
 
                 valid = compute_valid_mask(chip, NODATA_SENTINEL)  # (H,W)
                 valid_frac_patch = float(valid.mean())
@@ -320,33 +363,32 @@ def process_unique_polygon_list(unique_polygons_gdf: gpd.GeoDataFrame):
                     skipped_invalid += 1
                     continue
 
-                obs_data.append(chip)
-                obs_masks.append(mask)
+                data_arr[t_idx]  = chip
+                mask_arr[t_idx]  = mask
+                valid_arr[t_idx] = valid.astype(np.float32)
+                obs_kept += 1
                 time.sleep(REQUEST_SLEEP)
 
-            if obs_data:
-                data_arr = np.stack(obs_data, axis=0)         # (T,H,W,C)
-
-
-
-                mask_arr = np.stack(obs_masks, axis=0)  # (T,H,W)
+            if obs_kept > 0:
                 np.save(data_path, data_arr)
                 np.save(mask_path, mask_arr)
+                np.save(OUTPUT_DIR / f"{gid}_valid.npy", valid_arr)
                 save_metadata(
-                    gid, is_cg, ctx_size, len(obs_data),
+                    gid, is_cg, ctx_size, obs_kept,
                     quality_info={
-                        'observations_saved': len(obs_data),
+                        'observations_saved': obs_kept,
                         'skipped_partial': skipped_partial,
                         'skipped_contaminated': skipped_contaminated,
                         'skipped_invalid': skipped_invalid,
-                        'total_dates_processed': len(granule_dates)
+                        'total_dates_processed': len(granule_dates),
+                        'time_grid_len': len(TIME_GRID),
                     }
                 )
                 if is_cg: summary['cheatgrass_256x256'] += 1
                 else:      summary['control_32x32'] += 1
-                print(f"  saved {len(obs_data)} obs | data {data_arr.shape} mask {mask_arr.shape}", flush=True)
+                print(f"  saved {obs_kept} obs | data {data_arr.shape} mask {mask_arr.shape}", flush=True)
             else:
-                print("  no clear observations kept", flush=True)
+                print("  no clear observations kept (all time bins invalid/empty)", flush=True)
                 summary['skipped'] += 1
         except Exception as e:
             logger.exception(f"Polygon {row.get('global_id','?')} failed: {e} | debug={last_debug}")

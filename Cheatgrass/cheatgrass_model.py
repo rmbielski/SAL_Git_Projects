@@ -169,7 +169,8 @@ class ComboLoss(nn.Module):
             vm = valid_mask.flatten()
             keep = vm > 0.5
             if not keep.any():
-                return logits.new_tensor(0.0)
+                # Zero loss but keep graph attached to logits so backward is safe
+                return (logits * 0.0).sum()
             ft = ft[keep]
             tt = tt[keep]
         return self.mix * self.tversky(ft, tt) + (1 - self.mix) * self.bce(ft, tt)
@@ -822,81 +823,89 @@ def evaluate(
     cfg: ModelConfig,
     model_path: Path,
     test_ids: List[str],
-    threshold: Optional[float] = 0.5,   # allow None to auto-pick from manifest
+    threshold: Optional[float] = None,
     crops_per_sample: int = 3,
 ) -> Dict[str, Any]:
     """
-    Loads a saved model and evaluates on held-out IDs (random-crop robustness).
-    Returns summary dict with mean Dice and per-id metrics.
+    Evaluate a trained model on a separate directory / ID list.
+    If threshold is None, uses 0.5.
     """
+
     cfg.prepare()
-    set_seed(cfg.seed + 999)
+    set_seed(cfg.seed + 123)
 
-    # Resolve threshold: use manifest best_threshold if threshold is None
-    thr_to_use = 0.5 if threshold is None else float(threshold)
     if threshold is None:
-        man = _find_manifest_for_model(Path(model_path), cfg.output_dir)
-        if man is not None and man.get("best_threshold") is not None:
-            try:
-                thr_to_use = float(man["best_threshold"])
-                print(f"Using threshold from manifest: {thr_to_use:.2f}")
-            except Exception:
-                pass
+        threshold = 0.5
 
-    # Build and load model weights safely
+    print(f"[eval] Loading model from {model_path}")
     model = build_model(cfg)
     state = torch.load(model_path, map_location=cfg.device)
-    if isinstance(state, dict) and "state_dict" in state:
-        state = state["state_dict"]
     model.load_state_dict(state)
     model.eval()
 
-    # Build test dataset/loader (allow some pure-negative crops)
     test_ds = SpatiallyRobustVeduDataset(
         cfg.data_dir,
         test_ids,
         training_window_size=cfg.training_window_size,
         is_training=False,
-        enable_augmentation=True,
+        enable_augmentation=False,
         crops_per_epoch=crops_per_sample,
-        seed=cfg.seed + 2,
-        negative_crop_prob=0.5,       # moderate negative sampling at test time
+        seed=cfg.seed + 999,
+        verbose=False,
+        debug_every_n_batches=999999,
+        negative_crop_prob=0.0,
     )
+
     test_loader = DataLoader(
-        test_ds, batch_size=cfg.batch_size, shuffle=False,
-        num_workers=cfg.num_workers, pin_memory=cfg.pin_memory
+        test_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=cfg.pin_memory,
     )
 
-    per_batch = []
-    for data, target, valid in tqdm(test_loader, desc="Testing"):
-        data, target, valid = data.to(cfg.device), target.to(cfg.device), valid.to(cfg.device)
-        logits = model(data)
-        prob = torch.sigmoid(logits)
-        pred = (prob >= thr_to_use).float()
-        d = dice_coeff(pred, target, valid_mask=valid)
-        per_batch.append(d)
+    dice_scores = []
+    all_losses = []
+    criterion = ComboLoss(
+        alpha=0.5,
+        beta=0.5,
+        gamma=1.0,
+        bce_pos=2.0,
+        bce_neg=1.0,
+        mix=0.7,
+    )
 
-    mean_dice = float(np.mean(per_batch)) if per_batch else 0.0
-    std_dice = float(np.std(per_batch)) if per_batch else 0.0
+    with torch.no_grad():
+        for data, mask, valid in tqdm(test_loader, desc="Eval"):
+            data = data.to(cfg.device)
+            mask = mask.to(cfg.device)
+            valid = valid.to(cfg.device)
+
+            logits = model(data)
+            loss = criterion(logits, mask, valid_mask=valid)
+            all_losses.append(loss.item())
+
+            probs = torch.sigmoid(logits)
+            pred = (probs >= threshold).float()
+            d = dice_coeff(pred, mask, valid_mask=valid)
+            dice_scores.append(d)
 
     results = {
-        "model_path": str(model_path),
-        "threshold": float(thr_to_use),
-        "mean_dice": float(mean_dice),
-        "std_dice": float(std_dice),
-        "per_batch_dice": [float(x) for x in per_batch],
-        "n_batches": int(len(per_batch)),
-        "config": cfg.to_jsonable(),
-        "test_ids": [str(t) for t in test_ids],
+        "mean_dice": float(np.mean(dice_scores)) if dice_scores else 0.0,
+        "std_dice": float(np.std(dice_scores)) if dice_scores else 0.0,
+        "n_batches": len(dice_scores),
+        "mean_loss": float(np.mean(all_losses)) if all_losses else 0.0,
+        "threshold": float(threshold),
+        "test_ids": test_ids,
     }
 
-    out_json = cfg.output_dir / f"eval_{Path(model_path).stem}.json"
-    safe_results = make_json_safe(results)
-    with open(out_json, "w") as f:
-        json.dump(safe_results, f, indent=2, default=_json_default)
-    print(f"📊 Eval mean Dice={mean_dice:.4f} (±{std_dice:.4f})  -> {out_json.name}")
+    print(
+        f"[eval] mean dice={results['mean_dice']:.4f} ± {results['std_dice']:.4f} "
+        f"(n_batches={results['n_batches']}) | mean loss={results['mean_loss']:.6f}"
+    )
 
     return results
+
 
 
 # -----------------------------
