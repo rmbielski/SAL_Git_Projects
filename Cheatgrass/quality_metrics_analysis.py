@@ -425,6 +425,16 @@ def run_quality_filter(experimental_sets: Dict[str, Any], cfg: QualityConfig):
             except Exception:
                 continue
 
+            # Sanitize non-finite values to nodata and drop corresponding valid pixels
+            if not np.isfinite(data).all():
+                bad = ~np.isfinite(data)
+                data = data.astype(np.float32, copy=False)
+                data[bad] = cfg.nodata_value
+                # Optional: if mask exists for that time slice, zero it
+                if mask.shape[:3] == bad.shape[:3]:
+                    mask = mask.astype(np.float32, copy=False)
+                    mask[bad[..., 0]] = 0.0
+
             if data.ndim != 4 or mask.ndim != 3:
                 continue
 

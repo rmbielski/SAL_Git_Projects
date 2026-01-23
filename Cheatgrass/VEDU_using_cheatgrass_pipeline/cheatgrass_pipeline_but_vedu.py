@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore", message="The get_cmap function was deprecated"
 warnings.filterwarnings("ignore", "GeoSeries.notna", UserWarning)
 
 # ----------------------------- CONFIG -------------------------------------------
-DEFAULT_INPUT_PATH = "/home/rbielski/SAL_Git_Projects/Cheatgrass/filtered_cheatgrass_cleaned_valid_noglobal.geojson"
+DEFAULT_INPUT_PATH = "/home/rbielski/SAL_Git_Projects/Ventenata/Ventenata_Files/merge2324.shp"
 INPUT_PATH = os.getenv("CHEATGRASS_INPUT_PATH", DEFAULT_INPUT_PATH)
 print(f"Input dataset: {INPUT_PATH} (override with CHEATGRASS_INPUT_PATH)")
 
@@ -36,11 +36,10 @@ TARGET_CRS = "EPSG:32611"
 MIN_GEOFALLBACK_AREA = 1.0
 
 CHEATGRASS_ALIASES = {
-    "CHEATGRASS",
-    "DOWNY BROME",
-    "BROMUS TECTORUM",
-    "B. TECTORUM",
-    "BROMUS  TECTORUM",
+    "VEDU",
+    "VENTENATA",
+    "VENTENATA DUBIA",
+    "VENTENATA  DUBIA",
 }
 
 def _normalize_sciname(s: str) -> str:

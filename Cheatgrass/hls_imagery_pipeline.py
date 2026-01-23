@@ -74,13 +74,13 @@ HTTP = build_http_session(headers)
 # Bands & sizing
 BANDS_OF_INTEREST = ["B02", "B03", "B04", "B05", "B07", "B11"]
 CONTEXT_SIZE_CHEATGRASS = 256
-CONTEXT_SIZE_CONTROL = 32
-TRAINING_WINDOW_SIZE = 32
+CONTEXT_SIZE_CONTROL = 96
+TRAINING_WINDOW_SIZE = 96
 NODATA_SENTINEL = -9999.0
 MIN_VALID_FRACTION_PATCH = 0.6   # overall patch valid fraction to keep a slice
 MIN_VALID_FRACTION_POLY = 0.7    # valid fraction inside polygon mask
-DATE_RANGE_START = "2024-05-01"
-DATE_RANGE_END   = "2024-10-31"
+DATE_RANGE_START = "2022-05-01"
+DATE_RANGE_END   = "2025-10-31"
 TIME_GRID_STEP_DAYS = 14  # canonical bin size
 OUTPUT_DIR = Path("cheatgrass_data")  # align with VEDU tooling
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -253,26 +253,33 @@ def process_unique_polygon_list(unique_polygons_gdf: gpd.GeoDataFrame):
             data_path = OUTPUT_DIR / f"{gid}_data.npy"
             mask_path = OUTPUT_DIR / f"{gid}_mask.npy"
             meta_path = OUTPUT_DIR / f"{gid}_metadata.json"
-            # ---- replace this block in process_unique_polygon_list() ----
+            # Reuse/purge logic: skip only if context and time grid match and not forcing rebuild
+            force_rebuild = str(os.getenv("CHEATGRASS_FORCE_REBUILD", "0")).lower() in {"1","true","yes","on"}
             if data_path.exists() and mask_path.exists() and meta_path.exists():
+                ok_size = ok_grid = False
                 try:
                     with open(meta_path) as f:
                         meta = json.load(f)
                     ok_size = int(meta.get("context_size", 0)) == ctx_size
+                    tg_len = meta.get("quality_info", {}).get("time_grid_len", None)
+                    ok_grid = (tg_len == len(TIME_GRID))
                 except Exception:
-                    ok_size = False
+                    ok_size = ok_grid = False
 
-                if ok_size:
-                    print("  already processed (correct context); skipping")
+                if not force_rebuild and ok_size and ok_grid:
+                    print("  already processed (correct context/time grid); skipping")
                     continue
                 else:
-                    print(f"  found existing chips with wrong context -> purging and reprocessing (wanted {ctx_size})")
+                    reason = []
+                    if force_rebuild: reason.append("force")
+                    if not ok_size: reason.append("context mismatch")
+                    if not ok_grid: reason.append("time grid mismatch")
+                    print(f"  purging existing chips ({', '.join(reason) or 'mismatch'}) -> reprocessing (wanted ctx {ctx_size}, T={len(TIME_GRID)})")
                     for p in (data_path, mask_path, meta_path):
                         try:
                             p.unlink()
                         except FileNotFoundError:
                             pass
-            # -------------------------------------------------------------
 
 
             print("  querying CMR...", flush=True)

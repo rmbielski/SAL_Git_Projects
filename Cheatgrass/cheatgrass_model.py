@@ -16,6 +16,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.checkpoint import checkpoint
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 from tqdm import tqdm
@@ -35,22 +36,27 @@ class ModelConfig:
     batch_size: int = 1
     learning_rate: float = 1e-4
     epochs: int = 50
-    hidden_dim: int = 256  # more capacity for temporal modeling
+    hidden_dim: int = 512  # more capacity for temporal modeling
     lstm_layers: int = 2
     lstm_dropout: float = 0.1
-    attn_heads: int = 8
+    attn_heads: int = 16
     input_bands: int = 6
     train_val_split_size: float = 0.2
-    training_window_size: int = 32
+    training_window_size: int = 96
     enable_augmentation: bool = True
     train_crops_per_sample: int = 100
     validation_crops_per_sample: int = 100
+    train_negative_crop_prob: float = 0.2   # small amount of background crops to calibrate
+    validation_negative_crop_prob: float = 0.1
+    eval_negative_crop_prob: float = 0.0
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # reproducibility
     seed: int = 42
     # dataloader
     num_workers: int = 0
     pin_memory: bool = False
+    # memory-saving options
+    use_checkpointing: bool = True
 
     # NEW: debugging / verbose options for augmentation/training pipeline
     verbose: bool = False
@@ -182,6 +188,10 @@ class ComboLoss(nn.Module):
 # Tiny sparsity regularizer weight
 SPARSITY_LAMBDA = 1e-4  # softened: allow higher probabilities
 
+# Channel-wise normalization stats (computed on cheatgrass_data_validmask_copy/train after masking & clamping)
+BAND_MEAN = torch.tensor([224.4384, 311.10776, 343.74658, 744.1865, 570.997, 854.45917], dtype=torch.float32)
+BAND_STD = torch.tensor([536.07794, 611.5151, 664.91455, 1108.6785, 901.4944, 1299.8438], dtype=torch.float32)
+
 
 # -----------------------------
 # Cropping helpers
@@ -312,15 +322,16 @@ def enhanced_random_crop_sample(
         _, _, h, w = data.shape
 
     if (is_training and force_spatial_diversity) or (h > crop_size and w > crop_size):
-        first_mask = mask[0, 0].detach().cpu().numpy()
+        # Use any positive across time, not just the first slice (masks can be time-varying)
+        union_mask = (mask > 0).any(dim=0)[0].detach().cpu().numpy()
         # if force_include_vegetation is None -> default True (prior behavior)
         must_include = True if force_include_vegetation is None else bool(force_include_vegetation)
         if must_include:
             top, left = find_valid_crop_position_enhanced(
-                first_mask, crop_size, force_include_vegetation=True
+                union_mask, crop_size, force_include_vegetation=True
             )
         else:
-            top, left = find_pure_background_crop(first_mask, crop_size)
+            top, left = find_pure_background_crop(union_mask, crop_size)
         augmented = True
     else:
         top = (h - crop_size) // 2
@@ -342,82 +353,58 @@ def enhanced_random_crop_sample(
 # -----------------------------
 # Model
 # -----------------------------
-class PhenologyAwareUNet(nn.Module):
+class PixelTemporalPhenology(nn.Module):
     """
-    Sequence model: per-time-step 2D CNN -> sequence LSTM -> per-step decoder.
-    Expects spatial crop 32x32.
+    Per-pixel temporal/band model with minimal spatial bias.
+    Flattens spatial dimensions; runs temporal conv + Transformer over time; predicts per-time logits for each pixel.
     """
     def __init__(
         self,
         input_bands: int = 6,
         hidden_dim: int = 256,
-        output_classes: int = 1,
-        lstm_layers: int = 2,
-        lstm_dropout: float = 0.1,
-        attn_heads: int = 8,
+        n_heads: int = 8,
+        ff_dim: int = 512,
+        n_layers: int = 2,
+        dropout: float = 0.1,
+        use_checkpointing: bool = False,
     ):
         super().__init__()
-        self.feature_cnn = nn.Sequential(
-            nn.Conv2d(input_bands, 64, kernel_size=3, stride=1, padding=0), nn.ReLU(True),  # 32 -> 30
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=0), nn.ReLU(True),          # 30 -> 28
-            nn.MaxPool2d(kernel_size=2, stride=2),                                         # 28 -> 14
+        self.use_checkpointing = bool(use_checkpointing)
+        self.embed = nn.Linear(input_bands, hidden_dim)
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
+            nn.GELU(),
         )
-        fs = 128 * 14 * 14  # flattened feature per-time-step
-        attn_dim = hidden_dim * 2
-        # pick a valid head count
-        if attn_dim % attn_heads != 0:
-            attn_heads = 1 if attn_dim < 4 else max(1, attn_dim // 64)
-            while attn_dim % attn_heads != 0 and attn_heads > 1:
-                attn_heads -= 1
-
-        self.lstm = nn.LSTM(
-            fs,
-            hidden_dim,
-            num_layers=lstm_layers,
-            dropout=lstm_dropout if lstm_layers > 1 else 0.0,
-            batch_first=True,
-            bidirectional=True,
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim, nhead=n_heads,
+            dim_feedforward=ff_dim, dropout=dropout,
+            batch_first=True, activation='gelu'
         )
-        self.temporal_attn = nn.MultiheadAttention(
-            embed_dim=attn_dim,
-            num_heads=attn_heads,
-            dropout=lstm_dropout,
-            batch_first=True,
-        )
-        self.proj = nn.Linear(hidden_dim * 2, fs)
-
-        self.decoder = nn.Sequential(
-            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(True),
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # 14 -> 28
-            nn.ReLU(True),
-            nn.ConvTranspose2d(64, 64, kernel_size=5, stride=1, padding=0),  # 28 -> 32
-            nn.ReLU(True),
-            nn.Conv2d(64, output_classes, kernel_size=1),
-        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.head = nn.Linear(hidden_dim, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, T, C, H, W), H=W=32
+        # x: (B, T, C, H, W)
         b, t, c, h, w = x.shape
-        if (h, w) != (32, 32):
-            raise ValueError(f"Model expects 32x32 input, got {h}x{w}")
-
-        cnn_list = []
-        for i in range(t):
-            f = self.feature_cnn(x[:, i])  # (B, 64, 14, 14)
-            cnn_list.append(f.flatten(1))  # (B, fs)
-
-        seq = torch.stack(cnn_list, 1)  # (B, T, fs)
-        lstm_out, _ = self.lstm(seq)    # (B, T, 2*hidden)
-        attn_out, _ = self.temporal_attn(lstm_out, lstm_out, lstm_out)
-        fused = lstm_out + attn_out
-
-        outs = []
-        for i in range(t):
-            p = self.proj(fused[:, i]).view(b, 128, 14, 14)
-            d = self.decoder(p)  # (B, 1, 32, 32)
-            outs.append(d)
-        return torch.stack(outs, 1)  # (B, T, 1, 32, 32)
+        x = x.permute(0, 3, 4, 1, 2)  # (B,H,W,T,C)
+        x = x.reshape(b * h * w, t, c)  # (B*H*W, T, C)
+        x = self.embed(x)               # (B*H*W, T, hidden)
+        x_tc = x.transpose(1, 2)        # (B*H*W, hidden, T)
+        x_tc = self.temporal_conv(x_tc)
+        x_tc = x_tc.transpose(1, 2)     # (B*H*W, T, hidden)
+        if self.use_checkpointing:
+            x_tc = x_tc.requires_grad_()
+            # Recompute each encoder layer during backward to save activations
+            for layer in self.transformer.layers:
+                x_tc = checkpoint(layer, x_tc, use_reentrant=False)
+            x_enc = x_tc
+        else:
+            x_enc = self.transformer(x_tc)  # (B*H*W, T, hidden)
+        logits = self.head(x_enc)       # (B*H*W, T, 1)
+        logits = logits.view(b, h, w, t, 1).permute(0, 3, 4, 1, 2)  # (B,T,1,H,W)
+        return logits
 
 
 # -----------------------------
@@ -429,13 +416,13 @@ class SpatiallyRobustVeduDataset(Dataset):
       {id}_data.npy  -> shape (T, H, W, C)
       {id}_mask.npy  -> shape (T, H, W) or (H, W)
     Returns tensors:
-      data: (T, C, 32, 32), mask: (T, 1, 32, 32)
+      data: (T, C, 96, 96), mask: (T, 1, 96, 96)
     """
     def __init__(
         self,
         data_dir: Path,
         location_ids: List[str],
-        training_window_size: int = 32,
+        training_window_size: int = 96,
         is_training: bool = True,
         enable_augmentation: bool = True,
         crops_per_epoch: int = 1,
@@ -443,7 +430,7 @@ class SpatiallyRobustVeduDataset(Dataset):
         verbose: bool = False,
         debug_every_n_batches: int = 50,
         # NEW: probability to take a pure-background crop (no forced vegetation)
-        negative_crop_prob: float = 0.3,
+        negative_crop_prob: float = 0.0,
     ):
         self.data_dir = Path(data_dir)
         self.location_ids = [str(g) for g in location_ids]
@@ -510,8 +497,8 @@ class SpatiallyRobustVeduDataset(Dataset):
         else:
             debug_info = None
 
+        gid = self.location_ids[sample_idx]
         if self.verbose:
-            gid = self.location_ids[sample_idx]
             top, left, aug_flag, mask_sum = debug_info if debug_info is not None else ((data_t.shape[2]-self.training_window_size)//2, (data_t.shape[3]-self.training_window_size)//2, False, int(mask_t.sum().item()))
             self.last_debug_info = {
                 "gid": gid,
@@ -521,6 +508,23 @@ class SpatiallyRobustVeduDataset(Dataset):
                 "mask_sum_in_crop": int(mask_sum),
                 "crop_size": int(self.training_window_size),
             }
+
+        # Guard: detect and sanitize non-finite values, report gid
+        if not torch.isfinite(data_t).all() or not torch.isfinite(mask_t).all() or not torch.isfinite(valid_t).all():
+            print(f"[data warning] non-finite values in sample {gid}; sanitizing with nan_to_num")
+            data_t = torch.nan_to_num(data_t, nan=0.0, posinf=0.0, neginf=0.0)
+            mask_t = torch.nan_to_num(mask_t, nan=0.0, posinf=0.0, neginf=0.0)
+            valid_t = torch.nan_to_num(valid_t, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Clamp extreme sentinel values and zero-out invalid pixels using valid mask
+        data_t = torch.where(torch.abs(data_t) > 1e4, torch.zeros_like(data_t), data_t)
+        data_t = data_t * valid_t
+        if data_t.shape[1] == BAND_MEAN.numel():
+            mean = BAND_MEAN.view(1, -1, 1, 1)
+            std = BAND_STD.view(1, -1, 1, 1)
+            data_t = (data_t - mean) / std
+            data_t = torch.clamp(data_t, -6.0, 6.0)
+            data_t = data_t * valid_t
 
         return data_t, mask_t, valid_t
 
@@ -575,7 +579,7 @@ def make_dataloaders(
         seed=cfg.seed,
         verbose=cfg.verbose,
         debug_every_n_batches=cfg.debug_every_n_batches,
-        negative_crop_prob=0.4,   # softer: fewer pure-background crops
+        negative_crop_prob=cfg.train_negative_crop_prob,
     )
     val_ds = SpatiallyRobustVeduDataset(
         cfg.data_dir,
@@ -587,7 +591,7 @@ def make_dataloaders(
         seed=cfg.seed + 1,
         verbose=cfg.verbose,
         debug_every_n_batches=cfg.debug_every_n_batches,
-        negative_crop_prob=0.5,   # balanced validation
+        negative_crop_prob=cfg.validation_negative_crop_prob,
     )
     train_loader = DataLoader(
         train_ds, batch_size=cfg.batch_size, shuffle=True,
@@ -621,13 +625,14 @@ def dice_coeff(
 # Training
 # -----------------------------
 def build_model(cfg: ModelConfig) -> nn.Module:
-    model = PhenologyAwareUNet(
+    model = PixelTemporalPhenology(
         input_bands=cfg.input_bands,
         hidden_dim=cfg.hidden_dim,
-        output_classes=1,
-        lstm_layers=cfg.lstm_layers,
-        lstm_dropout=cfg.lstm_dropout,
-        attn_heads=cfg.attn_heads,
+        n_heads=cfg.attn_heads,
+        ff_dim=cfg.hidden_dim * 2,
+        n_layers=cfg.lstm_layers,
+        dropout=cfg.lstm_dropout,
+        use_checkpointing=cfg.use_checkpointing,
     )
     # NEW: bias final conv to prefer background (e.g., p0=0.01)
     p0 = 0.01
@@ -683,12 +688,12 @@ def train(
     model = build_model(cfg)
     # NEW: use ComboLoss (Tversky + weighted BCE)
     criterion = ComboLoss(
-        alpha=0.7,  # reduce FP penalty
-        beta=0.3,   # relatively more FN attention
+        alpha=0.3,   # lighter FP penalty
+        beta=0.7,    # heavier FN penalty (recall focus)
         gamma=1.0,
-        bce_pos=2.0,  # missing positives hurt more
-        bce_neg=1.0,  # stop overweighting negatives
-        mix=0.7       # lean on Tversky for imbalance
+        bce_pos=3.0, # missing positives hurt more
+        bce_neg=1.0,
+        mix=0.5      # balance Tversky/BCE
     )
     optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
@@ -707,6 +712,14 @@ def train(
         run_loss, n_batches = 0.0, 0
         for data, target, valid in tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.epochs} Train", leave=False):
             data, target, valid = data.to(cfg.device), target.to(cfg.device), valid.to(cfg.device)
+            # Guard: skip batches with bad numerics or empty valid mask
+            if not torch.isfinite(data).all() or not torch.isfinite(target).all() or not torch.isfinite(valid).all():
+                print("  [train skip] non-finite values detected; skipping batch")
+                continue
+            if valid.sum() == 0:
+                if epoch % 5 == 0:
+                    print("  [train skip] valid mask empty; skipping batch")
+                continue
             optimizer.zero_grad()
             logits = model(data)
             prob = torch.sigmoid(logits)
@@ -715,7 +728,15 @@ def train(
             else:
                 sparsity_term = 0.0
             loss = criterion(logits, target, valid_mask=valid) + sparsity_term
+            if not torch.isfinite(loss):
+                print("  [train skip] loss is non-finite; skipping batch")
+                continue
             loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if not torch.isfinite(grad_norm):
+                print("  [train skip] grad norm is non-finite; skipping optimizer step")
+                optimizer.zero_grad(set_to_none=True)
+                continue
             optimizer.step()
             run_loss += loss.item()
             n_batches += 1
@@ -733,10 +754,22 @@ def train(
         with torch.no_grad():
             for bidx, (data, target, valid) in enumerate(val_loader):
                 data, target, valid = data.to(cfg.device), target.to(cfg.device), valid.to(cfg.device)
+                # Guard: skip bad batches
+                if not torch.isfinite(data).all() or not torch.isfinite(target).all() or not torch.isfinite(valid).all():
+                    print("  [val skip] non-finite values detected; skipping batch")
+                    continue
+                if valid.sum() == 0:
+                    if epoch % 5 == 0:
+                        print("  [val skip] valid mask empty; skipping batch")
+                    continue
+
                 logits = model(data)
 
                 # loss (no sparsity in val)
                 vloss = criterion(logits, target, valid_mask=valid)
+                if not torch.isfinite(vloss):
+                    print("  [val skip] loss is non-finite; skipping batch")
+                    continue
                 val_batch_losses.append(vloss.item())
                 run_val += vloss.item()
                 n_bv += 1
@@ -776,7 +809,7 @@ def train(
             if keep.any():
                 probs_cat = probs_cat[keep]
                 tgts_cat  = tgts_cat[keep]
-                ths = torch.linspace(0.05, 0.95, steps=19)
+                ths = torch.linspace(0.02, 0.98, steps=25)
                 epoch_best_thresh, epoch_best_dice = 0.5, 0.0
                 for t in ths:
                     pred = (probs_cat >= t).float()
@@ -899,7 +932,7 @@ def evaluate(
         seed=cfg.seed + 999,
         verbose=False,
         debug_every_n_batches=999999,
-        negative_crop_prob=0.0,
+        negative_crop_prob=cfg.eval_negative_crop_prob,
     )
 
     test_loader = DataLoader(
@@ -913,12 +946,12 @@ def evaluate(
     dice_scores = []
     all_losses = []
     criterion = ComboLoss(
-        alpha=0.5,
-        beta=0.5,
+        alpha=0.3,
+        beta=0.7,
         gamma=1.0,
-        bce_pos=2.0,
+        bce_pos=3.0,
         bce_neg=1.0,
-        mix=0.7,
+        mix=0.5,
     )
 
     with torch.no_grad():
@@ -927,8 +960,18 @@ def evaluate(
             mask = mask.to(cfg.device)
             valid = valid.to(cfg.device)
 
+            if not torch.isfinite(data).all() or not torch.isfinite(mask).all() or not torch.isfinite(valid).all():
+                print("  [eval skip] non-finite values detected; skipping batch")
+                continue
+            if valid.sum() == 0:
+                print("  [eval skip] valid mask empty; skipping batch")
+                continue
+
             logits = model(data)
             loss = criterion(logits, mask, valid_mask=valid)
+            if not torch.isfinite(loss):
+                print("  [eval skip] loss is non-finite; skipping batch")
+                continue
             all_losses.append(loss.item())
 
             probs = torch.sigmoid(logits)
@@ -968,7 +1011,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--input_bands", type=int, default=6)
-    parser.add_argument("--window", type=int, default=32)
+    parser.add_argument("--window", type=int, default=96)
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=0.5)

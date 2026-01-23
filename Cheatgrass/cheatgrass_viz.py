@@ -152,6 +152,7 @@ def _choose_ids_to_visualize(
     test_ids: Optional[List[str]],
     df: Optional[pd.DataFrame],
     max_examples: int = 6,
+    seed: Optional[int] = None,
 ) -> List[str]:
     """
     Decide which GIDs to visualize:
@@ -176,7 +177,7 @@ def _choose_ids_to_visualize(
     if not all_ids:
         return []
 
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(seed)
     k = min(max_examples, len(all_ids))
     choice = rng.choice(all_ids, size=k, replace=False).tolist()
     return choice
@@ -187,6 +188,7 @@ def _visualize_samples(
     best_model_path: Path,
     best_threshold: float,
     ids_to_vis: List[str],
+    crop_seed: Optional[int] = None,
 ) -> None:
     """
     Build a tiny dataset on selected IDs and show predictions vs GT for mid time slice.
@@ -204,8 +206,9 @@ def _visualize_samples(
         is_training=False,
         enable_augmentation=False,
         crops_per_epoch=1,
-        seed=123,
+        seed=123 if crop_seed is None else int(crop_seed),
         verbose=False,
+        negative_crop_prob=0.0,  # always bias toward vegetation for viz
     )
 
     loader = torch.utils.data.DataLoader(
@@ -258,28 +261,36 @@ def _visualize_samples(
         target = sample["target"]  # (T,1,H,W)
         prob = sample["prob"]      # (T,1,H,W)
         pred = sample["pred"]      # (T,1,H,W)
+        valid = sample["valid"]    # (T,1,H,W)
 
         T, C, H, W = data.shape
-        mid_t = T // 2
+        # Pick the time slice with the most GT pixels; fall back to mid if all-zero
+        mask_sums = target[:, 0].sum(axis=(1, 2))
+        if mask_sums.max() > 0:
+            display_t = int(mask_sums.argmax())
+        else:
+            display_t = T // 2
+        mask_pix = int(mask_sums[display_t])
+
         rgb_bands = [2, 1, 0] if C >= 3 else [0, 0, 0]
 
-        rgb = data[mid_t, rgb_bands].transpose(1, 2, 0)
+        rgb = data[display_t, rgb_bands].transpose(1, 2, 0)
         rgb = (rgb - rgb.min()) / (rgb.max() - rgb.min() + 1e-8)
 
         axes[i, 0].imshow(rgb)
         axes[i, 0].axis("off")
-        axes[i, 0].set_title(f"ID {sample['gid']} - mid T RGB")
+        axes[i, 0].set_title(f"ID {sample['gid']} - T={display_t} RGB")
 
-        axes[i, 1].imshow(target[mid_t, 0], cmap="Greens", vmin=0, vmax=1)
+        axes[i, 1].imshow(target[display_t, 0], cmap="Greens", vmin=0, vmax=1)
         axes[i, 1].axis("off")
-        axes[i, 1].set_title("GT mask")
+        axes[i, 1].set_title(f"GT mask (pix={mask_pix})")
 
-        im = axes[i, 2].imshow(prob[mid_t, 0], cmap="Reds", vmin=0, vmax=1)
+        im = axes[i, 2].imshow(prob[display_t, 0], cmap="Reds", vmin=0, vmax=1)
         axes[i, 2].axis("off")
         axes[i, 2].set_title("Prob (cheatgrass)")
         fig.colorbar(im, ax=axes[i, 2], fraction=0.046, pad=0.04)
 
-        axes[i, 3].imshow(pred[mid_t, 0], cmap="Blues", vmin=0, vmax=1)
+        axes[i, 3].imshow(pred[display_t, 0], cmap="Blues", vmin=0, vmax=1)
         axes[i, 3].axis("off")
         axes[i, 3].set_title(f"Pred (thr={best_threshold:.2f})")
 
@@ -294,6 +305,7 @@ def visualize_eval_and_samples(
     test_ids: Optional[List[str]] = None,
     eval_results: Optional[Dict[str, Any]] = None,
     max_examples: int = 6,
+    random_seed: Optional[int] = None,
 ) -> None:
     """
     High-level helper:
@@ -334,5 +346,11 @@ def visualize_eval_and_samples(
     _summarize_csv(df)
 
     # 3) Sample-level visualizations
-    ids_to_vis = _choose_ids_to_visualize(cfg, test_ids, df, max_examples=max_examples)
-    _visualize_samples(cfg, best_model_path, best_threshold, ids_to_vis)
+    ids_to_vis = _choose_ids_to_visualize(
+        cfg,
+        test_ids,
+        df,
+        max_examples=max_examples,
+        seed=random_seed,
+    )
+    _visualize_samples(cfg, best_model_path, best_threshold, ids_to_vis, crop_seed=random_seed)
