@@ -698,11 +698,14 @@ def train(
     optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
     best_val = float("inf")
+    best_dice = -1.0
     # removed: old best_path assignment (now handled above with unique name)
     train_losses, val_losses = [], []
     val_dice_hist = []
     # Track best threshold alongside best model
     best_epoch_threshold = 0.5
+    best_dice_threshold = 0.5
+    best_dice_path = cfg.output_dir / f"{base_name}_bestdice.pt"
 
     for epoch in range(cfg.epochs):
         train_ds.set_epoch(epoch)
@@ -833,6 +836,12 @@ def train(
             best_epoch_threshold = epoch_best_thresh  # NEW: keep threshold with best model
             torch.save(model.state_dict(), best_path)
 
+        # Save a separate checkpoint for best Dice
+        if epoch_best_dice > best_dice:
+            best_dice = epoch_best_dice
+            best_dice_threshold = epoch_best_thresh
+            torch.save(model.state_dict(), best_dice_path)
+
         if (epoch == 0) or ((epoch + 1) % 10 == 0):
             print(f"Epoch {epoch+1:02d} | train {avg_train:.4f} | val {avg_val:.4f} | "
                 f"val_dice@0.5 {mean_val_dice:.4f} | best {best_val:.4f}")
@@ -854,6 +863,9 @@ def train(
         "best_model_path": str(best_path),
         # NEW: persist best threshold for this trained checkpoint
         "best_threshold": float(best_epoch_threshold),
+        "best_dice": float(best_dice),
+        "best_dice_threshold": float(best_dice_threshold),
+        "best_dice_model_path": str(best_dice_path),
         "training_curves_path": str(curve_path),
         "train_losses": [float(x) for x in train_losses],
         "val_losses": [float(x) for x in val_losses],
@@ -897,6 +909,26 @@ def _find_manifest_for_model(model_path: Path, output_dir: Path) -> Optional[Dic
         pass
     return None
 
+
+def _apply_manifest_arch(cfg: ModelConfig, manifest_cfg: Dict[str, Any]) -> ModelConfig:
+    """
+    Overwrite architecture-critical fields in cfg with values saved in manifest['config']
+    so that model shapes match the checkpoint. Paths are left unchanged.
+    """
+    arch_keys = [
+        "hidden_dim",
+        "attn_heads",
+        "lstm_layers",
+        "lstm_dropout",
+        "input_bands",
+        "training_window_size",
+        "use_checkpointing",
+    ]
+    for k in arch_keys:
+        if k in manifest_cfg:
+            setattr(cfg, k, manifest_cfg[k])
+    return cfg
+
 @torch.no_grad()
 def evaluate(
     cfg: ModelConfig,
@@ -915,6 +947,12 @@ def evaluate(
 
     if threshold is None:
         threshold = 0.5
+
+    manifest = _find_manifest_for_model(model_path, cfg.output_dir)
+    if manifest and "config" in manifest:
+        cfg = _apply_manifest_arch(cfg, manifest["config"])
+        if cfg.verbose:
+            print("[eval] Applied architecture from manifest for shape compatibility.")
 
     print(f"[eval] Loading model from {model_path}")
     model = build_model(cfg)
