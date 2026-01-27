@@ -49,6 +49,9 @@ class ModelConfig:
     train_negative_crop_prob: float = 0.2   # small amount of background crops to calibrate
     validation_negative_crop_prob: float = 0.1
     eval_negative_crop_prob: float = 0.0
+    # Add validity channel + filtering
+    add_valid_channel: bool = False   # set True to append per-pixel validity channel
+    min_valid_fraction: float = 0.01  # drop time slices with <1% valid pixels
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # reproducibility
     seed: int = 42
@@ -334,6 +337,7 @@ def enhanced_random_crop_sample(
             top, left = find_pure_background_crop(union_mask, crop_size)
         augmented = True
     else:
+        # deterministic center crop when not training / no augmentation
         top = (h - crop_size) // 2
         left = (w - crop_size) // 2
         augmented = False
@@ -431,6 +435,8 @@ class SpatiallyRobustVeduDataset(Dataset):
         debug_every_n_batches: int = 50,
         # NEW: probability to take a pure-background crop (no forced vegetation)
         negative_crop_prob: float = 0.0,
+        min_valid_fraction: float = 0.01,
+        add_valid_channel: bool = True,
     ):
         self.data_dir = Path(data_dir)
         self.location_ids = [str(g) for g in location_ids]
@@ -445,6 +451,8 @@ class SpatiallyRobustVeduDataset(Dataset):
         self.last_debug_info = None  # holds last per-sample debug info
         self.sample_metadata = {gid: load_sample_metadata(self.data_dir, gid) for gid in self.location_ids}
         self.negative_crop_prob = float(negative_crop_prob)
+        self.min_valid_fraction = float(min_valid_fraction)
+        self.add_valid_channel = bool(add_valid_channel)
 
     def set_epoch(self, epoch: int):
         self.current_epoch = epoch
@@ -481,14 +489,40 @@ class SpatiallyRobustVeduDataset(Dataset):
         mask_t = torch.from_numpy(mask)
         valid_t = torch.from_numpy(valid)
 
+        # Build pixel-level validity (per-pixel, per-time) and filter invalid frames
+        pixel_valid = (valid_t > 0.5) & torch.isfinite(data_t) & (torch.abs(data_t) < 1e4)
+        # reduce channel dimension to a single validity flag per pixel/time (all bands must be valid)
+        if pixel_valid.dim() == 4:
+            pixel_valid = pixel_valid.min(dim=1, keepdim=True)[0]
+        # Drop time steps with too little valid coverage
+        if pixel_valid.numel() > 0:
+            valid_frac_per_t = pixel_valid.reshape(pixel_valid.shape[0], -1).float().mean(dim=1)
+            keep_t = valid_frac_per_t >= float(getattr(self, "min_valid_fraction", 0.01))
+            if not keep_t.any():
+                keep_t[valid_frac_per_t.argmax()] = True
+            data_t = data_t[keep_t]
+            mask_t = mask_t[keep_t]
+            valid_t = valid_t[keep_t]
+            pixel_valid = pixel_valid[keep_t]
+
+        # Replace valid_t with per-pixel validity
+        valid_t = pixel_valid.float()
+
+        # Normalization is applied after cropping; crop first for efficiency
         if self.enable_augmentation or (data_t.shape[2], data_t.shape[3]) != (self.training_window_size, self.training_window_size):
             force_include = True
             if random.random() < self.negative_crop_prob:
                 force_include = False
+            # At eval time (is_training False) avoid vegetation bias
+            if not self.is_training:
+                force_include = False
+                force_spatial_diversity = False
+            else:
+                force_spatial_diversity = self.enable_augmentation
             dc, mc, vc, debug_info = enhanced_random_crop_sample(
                 data_t, mask_t, self.training_window_size,
                 is_training=self.is_training,
-                force_spatial_diversity=self.enable_augmentation,
+                force_spatial_diversity=force_spatial_diversity,
                 debug=self.verbose,
                 force_include_vegetation=force_include,
                 valid=valid_t,
@@ -519,12 +553,17 @@ class SpatiallyRobustVeduDataset(Dataset):
         # Clamp extreme sentinel values and zero-out invalid pixels using valid mask
         data_t = torch.where(torch.abs(data_t) > 1e4, torch.zeros_like(data_t), data_t)
         data_t = data_t * valid_t
+        # Optional per-channel normalization
         if data_t.shape[1] == BAND_MEAN.numel():
             mean = BAND_MEAN.view(1, -1, 1, 1)
             std = BAND_STD.view(1, -1, 1, 1)
             data_t = (data_t - mean) / std
             data_t = torch.clamp(data_t, -6.0, 6.0)
             data_t = data_t * valid_t
+
+        # Optionally append validity as an extra channel
+        if getattr(self, "add_valid_channel", True):
+            data_t = torch.cat([data_t, valid_t], dim=1)
 
         return data_t, mask_t, valid_t
 
@@ -580,6 +619,8 @@ def make_dataloaders(
         verbose=cfg.verbose,
         debug_every_n_batches=cfg.debug_every_n_batches,
         negative_crop_prob=cfg.train_negative_crop_prob,
+        min_valid_fraction=cfg.min_valid_fraction,
+        add_valid_channel=cfg.add_valid_channel,
     )
     val_ds = SpatiallyRobustVeduDataset(
         cfg.data_dir,
@@ -592,6 +633,8 @@ def make_dataloaders(
         verbose=cfg.verbose,
         debug_every_n_batches=cfg.debug_every_n_batches,
         negative_crop_prob=cfg.validation_negative_crop_prob,
+        min_valid_fraction=cfg.min_valid_fraction,
+        add_valid_channel=cfg.add_valid_channel,
     )
     train_loader = DataLoader(
         train_ds, batch_size=cfg.batch_size, shuffle=True,
@@ -625,8 +668,9 @@ def dice_coeff(
 # Training
 # -----------------------------
 def build_model(cfg: ModelConfig) -> nn.Module:
+    in_bands = cfg.input_bands + (1 if getattr(cfg, "add_valid_channel", False) else 0)
     model = PixelTemporalPhenology(
-        input_bands=cfg.input_bands,
+        input_bands=in_bands,
         hidden_dim=cfg.hidden_dim,
         n_heads=cfg.attn_heads,
         ff_dim=cfg.hidden_dim * 2,
@@ -923,6 +967,7 @@ def _apply_manifest_arch(cfg: ModelConfig, manifest_cfg: Dict[str, Any]) -> Mode
         "input_bands",
         "training_window_size",
         "use_checkpointing",
+        "add_valid_channel",
     ]
     for k in arch_keys:
         if k in manifest_cfg:
@@ -971,6 +1016,8 @@ def evaluate(
         verbose=False,
         debug_every_n_batches=999999,
         negative_crop_prob=cfg.eval_negative_crop_prob,
+        min_valid_fraction=cfg.min_valid_fraction,
+        add_valid_channel=cfg.add_valid_channel,
     )
 
     test_loader = DataLoader(

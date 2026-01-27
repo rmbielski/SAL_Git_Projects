@@ -209,6 +209,8 @@ def _visualize_samples(
         seed=123 if crop_seed is None else int(crop_seed),
         verbose=False,
         negative_crop_prob=0.0,  # always bias toward vegetation for viz
+        min_valid_fraction=cfg.min_valid_fraction,
+        add_valid_channel=cfg.add_valid_channel,
     )
 
     loader = torch.utils.data.DataLoader(
