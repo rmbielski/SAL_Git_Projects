@@ -224,19 +224,49 @@ def _visualize_samples(
     # Ensure cfg has input_bands etc.
     cfg.prepare()
     model = build_model(cfg)
+    # Disable checkpointing for inference to avoid CUDA config errors on big inputs
+    if hasattr(model, "use_checkpointing"):
+        model.use_checkpointing = False
     model.load_state_dict(torch.load(best_model_path, map_location=cfg.device))
     model.eval()
 
     examples = []
+    def sliding_window_infer(x, valid, model, window=96, stride=64):
+        """Full-frame inference via tiled crops to avoid huge Transformer flatten."""
+        b, t, c, h, w = x.shape
+        device = x.device
+        prob_acc = torch.zeros((b, 1, h, w), device=device)
+        weight = torch.zeros_like(prob_acc)
+        for y in range(0, h - window + 1, stride):
+            for xx in range(0, w - window + 1, stride):
+                crop = x[:, :, :, y:y+window, xx:xx+window]
+                with torch.no_grad():
+                    p = torch.sigmoid(model(crop))  # (b,t,1,window,window)
+                p = p[:,0]  # first time slice for viz
+                prob_acc[:, :, y:y+window, xx:xx+window] += p
+                weight[:, :, y:y+window, xx:xx+window] += 1
+        prob = prob_acc / weight.clamp(min=1)
+        # Apply valid mask if provided
+        prob = prob * valid[:,0]  # assume valid shape (b,T,1,H,W)
+        return prob
+
     with torch.no_grad():
         for idx, (data, target, valid) in enumerate(loader):
             data = data.to(cfg.device)      # (1,T,C,H,W)
             target = target.to(cfg.device)  # (1,T,1,H,W)
             valid = valid.to(cfg.device)    # (1,T,1,H,W)
 
-            logits = model(data)
-            prob = torch.sigmoid(logits)
-            pred = (prob >= best_threshold).float()
+            # For large frames, use sliding window on first time slice for viz
+            if cfg.training_window_size >= 192:
+                prob = sliding_window_infer(data, valid, model, window=96, stride=64)
+                pred = (prob >= best_threshold).float()
+                # Expand back to (T,1,H,W) for plotting: replicate slice 0
+                prob = prob.unsqueeze(1).repeat(1, target.shape[1], 1, 1, 1)
+                pred = pred.unsqueeze(1).repeat(1, target.shape[1], 1, 1, 1)
+            else:
+                logits = model(data)
+                prob = torch.sigmoid(logits)
+                pred = (prob >= best_threshold).float()
 
             examples.append(
                 dict(
