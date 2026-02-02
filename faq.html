@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Zubr FAQ: Frequently asked questions about our weed detection tools for producers and program leads.">
+    <title>FAQ - Zubr</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+    <link rel="icon" type="image/png" href="logo.png">
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <a href="index.html" class="logo">
+                <img src="logo.png" alt="Zubr logo">
+            </a>
+            <button class="hamburger" aria-label="Toggle navigation" aria-expanded="false">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <nav class="nav" aria-hidden="true">
+                <ul class="nav-list">
+                    <li><a href="index.html" class="nav-link">Home</a></li>
+                    <li><a href="products.html" class="nav-link">Products</a></li>
+                    <li><a href="technology.html" class="nav-link">Technology</a></li>
+                    <li><a href="use-cases.html" class="nav-link">Use Cases</a></li>
+                    <li><a href="pricing.html" class="nav-link">Pricing</a></li>
+                    <li><a href="about.html" class="nav-link">About</a></li>
+                    <li><a href="resources.html" class="nav-link">Resources</a></li>
+                    <li><a href="faq.html" class="nav-link">FAQ</a></li>
+                    <li><a href="contact.html" class="nav-link">Contact</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main id="main-content">
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="container">
+                <h1>Frequently Asked Questions</h1>
+                <p class="subhead">Fast answers for producers and program leads.</p>
+            </div>
+        </section>
+
+        <!-- FAQ Section -->
+        <section class="section">
+            <div class="container">
+                <div class="faq-list">
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            How accurate is handheld screening vs. lab tests?
+                        </button>
+                        <div class="faq-answer">
+                            <p>Our handheld screening is calibrated against lab measurements using spiked samples at known contamination levels. While spectral screening doesn't replace microscopy for definitive identification, it provides rapid, field-ready detection that catches high-risk bales efficiently.</p>
+                            <p>Detection sensitivity depends on contamination level and species. Our calibration targets detecting contamination levels that would affect hay quality or certification—typically a few percent by weight. For validation data, see our technical brief.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            Can you add other target species?
+                        </button>
+                        <div class="faq-answer">
+                            <p>Yes. Our spectral library is designed to expand. Adding a new species requires collecting reference spectra from pure samples under controlled conditions, then validating detection in field samples.</p>
+                            <p>We prioritize species based on customer demand and regional importance. If there's a specific weed you need to detect, let us know—we may already have it in development or can add it to our roadmap.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            What if my hay is wet?
+                        </button>
+                        <div class="faq-answer">
+                            <p>Our models are designed to handle moisture variation. We use orthogonal signal correction methods (OSC/ROSC) to remove water-band interference while preserving the spectral features of target species.</p>
+                            <p>Our calibration includes samples across a range of moisture levels typical for field conditions. That said, extremely wet hay (just baled, or rained on) may reduce detection accuracy. For best results, scan hay at typical storage moisture levels.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            Do I need a special drone?
+                        </button>
+                        <div class="faq-answer">
+                            <p>No—we can work with a range of drone platforms. Our FieldScan service uses hyperspectral or multispectral sensors that can be mounted on common commercial drones.</p>
+                            <p>If you don't have your own drone or sensor, we offer full-service mapping where we fly your fields and deliver results. We also work with partner service providers who can handle flights in your area.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            Who owns my data?
+                        </button>
+                        <div class="faq-answer">
+                            <p><strong>You own your data.</strong> Scan results, maps, and reports belong to you. We store data securely for your access but never share identifiable data without your explicit consent.</p>
+                            <p>We may use anonymized, aggregated statistics to improve our models and report on regional trends, but only with your consent and never in a way that identifies your operation.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            How long does it take to get results?
+                        </button>
+                        <div class="faq-answer">
+                            <p><strong>Handheld screening:</strong> Results in seconds. The pass/warn/flag readout appears immediately after scanning.</p>
+                            <p><strong>Drone mapping:</strong> Typically 24-48 hours after flight data is uploaded. Complex sites or large areas may take longer. Rush processing is available for urgent needs.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            What's the difference between pass, warn, and flag?
+                        </button>
+                        <div class="faq-answer">
+                            <p>Our three-level classification helps you make decisions quickly:</p>
+                            <ul style="margin: 1rem 0 0 1.5rem;">
+                                <li><strong>Pass:</strong> Low risk — spectral signature below threshold for target species</li>
+                                <li><strong>Warn:</strong> Moderate risk — some signal detected, may warrant further inspection or documentation</li>
+                                <li><strong>Flag:</strong> High risk — strong signal for target species, recommend segregation or rejection</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            Can I use this for weed-free forage certification?
+                        </button>
+                        <div class="faq-answer">
+                            <p>Our tools can support certification programs by providing objective screening documentation, but they don't replace official certification processes. Certification requirements vary by state and program.</p>
+                            <p>We're happy to work with certification programs to understand how our tools can complement their workflows. Contact us to discuss your specific requirements.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            Where do you currently operate?
+                        </button>
+                        <div class="faq-answer">
+                            <p>We're based in Western Montana and serve the Northern Rockies region directly. Through our partner network, we can provide services across the Western U.S.</p>
+                            <p>If you're outside our current service area, contact us—we're always looking to expand our reach and may be able to work with local partners or ship handheld equipment.</p>
+                        </div>
+                    </div>
+
+                    <div class="faq-item">
+                        <button class="faq-question" aria-expanded="false">
+                            How do I get started?
+                        </button>
+                        <div class="faq-answer">
+                            <p>The best way to start is with a pilot project. Contact us with information about your operation—acreage, bale counts, target species of concern—and we'll recommend an approach and provide a quote.</p>
+                            <p>Pilots are scoped to a specific site or lot with fixed deliverables, so you can evaluate the tools before committing to a larger engagement.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CTA Section -->
+        <section class="section section-light">
+            <div class="container text-center">
+                <h2>Still have questions?</h2>
+                <p>We're happy to help. Reach out and we'll get back to you quickly.</p>
+                <a href="contact.html" class="btn btn-accent" style="margin-top: 1rem;">Contact us</a>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Zubr</h4>
+                    <p>AI-driven weed detection for hay and rangelands. Protecting forage quality and guiding efficient weed control across the Northern Rockies and beyond.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Products</h4>
+                    <ul class="footer-links">
+                        <li><a href="products.html">HayGuard™ Analyzer</a></li>
+                        <li><a href="products.html">FieldScan™ Mapping</a></li>
+                        <li><a href="products.html">SpectraCloud™ Portal</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Company</h4>
+                    <ul class="footer-links">
+                        <li><a href="about.html">About Us</a></li>
+                        <li><a href="technology.html">Technology</a></li>
+                        <li><a href="resources.html">Resources</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Connect</h4>
+                    <div class="social-links">
+                        <a href="#" aria-label="LinkedIn">LinkedIn</a>
+                        <a href="#" aria-label="Twitter">Twitter</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; <span class="current-year">2025</span> Zubr. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="assets/js/main.js"></script>
+</body>
+</html>

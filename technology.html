@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Zubr technology: Scatter correction, moisture handling, denoising, and sub-pixel detection anchored to lab truth.">
+    <title>Technology - Zubr</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+    <link rel="icon" type="image/png" href="logo.png">
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <a href="index.html" class="logo">
+                <img src="logo.png" alt="Zubr logo">
+            </a>
+            <button class="hamburger" aria-label="Toggle navigation" aria-expanded="false">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <nav class="nav" aria-hidden="true">
+                <ul class="nav-list">
+                    <li><a href="index.html" class="nav-link">Home</a></li>
+                    <li><a href="products.html" class="nav-link">Products</a></li>
+                    <li><a href="technology.html" class="nav-link">Technology</a></li>
+                    <li><a href="use-cases.html" class="nav-link">Use Cases</a></li>
+                    <li><a href="pricing.html" class="nav-link">Pricing</a></li>
+                    <li><a href="about.html" class="nav-link">About</a></li>
+                    <li><a href="resources.html" class="nav-link">Resources</a></li>
+                    <li><a href="faq.html" class="nav-link">FAQ</a></li>
+                    <li><a href="contact.html" class="nav-link">Contact</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main id="main-content">
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="container">
+                <h1>Built to beat noise in the real world.</h1>
+                <p class="subhead">Scatter correction, moisture orthogonalization, denoising, and sub-pixel detection—anchored to lab truth.</p>
+            </div>
+        </section>
+
+        <!-- Preprocessing Section -->
+        <section class="section">
+            <div class="container">
+                <div class="section-title">
+                    <h2>Preprocessing</h2>
+                    <p>Robust signal preparation for reliable detection in field conditions.</p>
+                </div>
+                <div class="cards-grid">
+                    <div class="card">
+                        <h3>Scatter Correction</h3>
+                        <p>Real-world spectra are affected by physical scattering from particle size, surface texture, and sample geometry. Our preprocessing pipeline addresses these challenges:</p>
+                        <ul>
+                            <li><strong>SNV (Standard Normal Variate)</strong> — Removes baseline shift and path-length variation</li>
+                            <li><strong>MSC (Multiplicative Scatter Correction)</strong> — Corrects multiplicative scatter effects</li>
+                            <li><strong>EMSC (Extended MSC)</strong> — Advanced correction separating scatter from chemical absorbance</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>Moisture Handling</h3>
+                        <p>Water bands dominate NIR spectra in undried hay and green pasture. We use orthogonalization methods to remove moisture interference while preserving target signals:</p>
+                        <ul>
+                            <li><strong>OSC (Orthogonal Signal Correction)</strong> — Removes variance uncorrelated with targets</li>
+                            <li><strong>ROSC (Robust OSC)</strong> — Enhanced stability across moisture ranges</li>
+                            <li>Calibration sets spanning real-world moisture levels ensure robust performance</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Denoising Section -->
+        <section class="section section-light">
+            <div class="container">
+                <div class="section-title">
+                    <h2>Denoising & Features</h2>
+                    <p>Extracting meaningful signal from noisy field data.</p>
+                </div>
+                <div class="cards-grid">
+                    <div class="card">
+                        <h3>Hyperspectral Cube Processing</h3>
+                        <p>For drone-collected imagery, we apply dimensionality reduction that separates signal from noise:</p>
+                        <ul>
+                            <li><strong>MNF (Minimum Noise Fraction)</strong> — Standard noise-ordered transform</li>
+                            <li><strong>OKMNF</strong> — Optimized kernel variant for improved separation</li>
+                            <li>Preserves subtle spectral features while removing sensor and atmospheric noise</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>Spectral Denoising</h3>
+                        <p>For point spectra from handheld analyzers:</p>
+                        <ul>
+                            <li><strong>Wavelet denoising</strong> — Multi-scale noise removal preserving sharp spectral features</li>
+                            <li>Adaptive thresholding based on noise characteristics</li>
+                            <li>Preserves diagnostic absorption bands</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>Spectral-Spatial Fusion</h3>
+                        <p>Combining spectral signatures with spatial context improves detection in heterogeneous scenes:</p>
+                        <ul>
+                            <li><strong>GLCM texture</strong> — Gray-level co-occurrence matrices capture patch structure</li>
+                            <li>Spatial context helps distinguish isolated plants from patches</li>
+                            <li>Improves accuracy in mixed vegetation scenarios</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Detection Section -->
+        <section class="section">
+            <div class="container">
+                <div class="section-title">
+                    <h2>Detection & Calibration</h2>
+                    <p>Lab-grounded models tuned for real-world performance.</p>
+                </div>
+                <div class="cards-grid">
+                    <div class="card">
+                        <h3>Sub-Pixel Detectors</h3>
+                        <p>Finding targets that don't fill an entire pixel is the key challenge for early detection. Our detection algorithms are designed for this scenario:</p>
+                        <ul>
+                            <li><strong>CEM (Constrained Energy Minimization)</strong> — Optimal filter for known target spectra</li>
+                            <li><strong>ACE (Adaptive Coherence Estimator)</strong> — Background-adaptive detection</li>
+                            <li><strong>Matched Filter</strong> — Classic approach with scene adaptation</li>
+                            <li>All methods tuned with clean lab spectra and adapted to each scene</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>Calibration Approach</h3>
+                        <p>Robust detection requires rigorous calibration with known samples:</p>
+                        <ul>
+                            <li><strong>Spiked sample sets</strong> — Known "blades/kg" concentrations across moisture levels</li>
+                            <li><strong>Lab reference spectra</strong> — Pure target spectra under controlled conditions</li>
+                            <li><strong>Field validation</strong> — Ground-truth verification in real conditions</li>
+                            <li>Focus on low-cover, mixed-pixel signals (e.g., single blades in bales)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Technical Brief CTA -->
+        <section class="section section-light">
+            <div class="container text-center">
+                <h2>Want the full technical details?</h2>
+                <p>Download our technical brief for a deeper dive into methods, validation results, and citations.</p>
+                <a href="technical-brief.pdf" class="btn btn-accent" style="margin-top: 1rem;">Download the technical brief (PDF)</a>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Zubr</h4>
+                    <p>AI-driven weed detection for hay and rangelands. Protecting forage quality and guiding efficient weed control across the Northern Rockies and beyond.</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Products</h4>
+                    <ul class="footer-links">
+                        <li><a href="products.html">HayGuard™ Analyzer</a></li>
+                        <li><a href="products.html">FieldScan™ Mapping</a></li>
+                        <li><a href="products.html">SpectraCloud™ Portal</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Company</h4>
+                    <ul class="footer-links">
+                        <li><a href="about.html">About Us</a></li>
+                        <li><a href="technology.html">Technology</a></li>
+                        <li><a href="resources.html">Resources</a></li>
+                        <li><a href="contact.html">Contact</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Connect</h4>
+                    <div class="social-links">
+                        <a href="#" aria-label="LinkedIn">LinkedIn</a>
+                        <a href="#" aria-label="Twitter">Twitter</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; <span class="current-year">2025</span> Zubr. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="assets/js/main.js"></script>
+</body>
+</html>
